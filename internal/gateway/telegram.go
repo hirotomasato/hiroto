@@ -25,8 +25,16 @@ import (
 )
 
 // chat keeps per-chat conversation state so users never share context.
+// It is bound to a stable session ID so the conversation survives restarts.
 type chat struct {
+	id       string
 	messages []llm.Message
+}
+
+// sessionIDFor derives a stable, store-safe session id from a Telegram chat id.
+func sessionIDFor(chatID int64) string {
+	// regexp-safe: digits, letters, '_' and '-' are allowed by the store.
+	return fmt.Sprintf("tg%d", chatID)
 }
 
 // gw holds the bot runtime state shared across all chats.
@@ -146,7 +154,11 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 
 	st, ok := g.chats[chatID]
 	if !ok {
-		st = &chat{}
+		st = &chat{id: sessionIDFor(chatID)}
+		// resume any prior conversation for this chat that survived a restart
+		if saved, err := g.sess.Load(st.id); err == nil {
+			st.messages = fromStored(saved.Messages)
+		}
 		g.chats[chatID] = st
 	}
 	ag := g.ag
@@ -180,7 +192,63 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 	if len(answer) > 4000 {
 		answer = answer[:4000] + "\n… (dipotong)"
 	}
+	g.saveChat(st)
 	live.finish(answer)
+}
+
+// saveChat persists this chat's conversation under its stable session id so
+// it survives a restart and can be resumed from the TUI or gateway.
+func (g *gw) saveChat(st *chat) {
+	users := 0
+	for _, m := range st.messages {
+		if m.Role == llm.RoleUser {
+			users++
+		}
+	}
+	if users == 0 {
+		return
+	}
+	title := firstUserText(st.messages, 60)
+	sess := &session.Session{
+		ID:       st.id,
+		Title:    title,
+		Model:    g.ag.Client.Model,
+		Created:  time.Now(),
+		Updated:  time.Now(),
+		Messages: toStored(st.messages),
+	}
+	_ = g.sess.Save(sess)
+}
+
+func firstUserText(msgs []llm.Message, max int) string {
+	for _, m := range msgs {
+		if m.Role == llm.RoleUser {
+			if s, ok := m.Content.(string); ok {
+				s = strings.TrimSpace(s)
+				if len(s) > max {
+					s = s[:max] + "…"
+				}
+				return s
+			}
+		}
+	}
+	return "(tanpa judul)"
+}
+
+// toStored converts llm messages for persistence.
+func toStored(msgs []llm.Message) []session.StoredMessage {
+	out := make([]session.StoredMessage, 0, len(msgs))
+	for _, m := range msgs {
+		sm := session.StoredMessage{Role: string(m.Role), ToolCallID: m.ToolCallID, ToolName: m.Name}
+		if s, ok := m.Content.(string); ok {
+			sm.Content = s
+		}
+		for _, tc := range m.ToolCalls {
+			sm.ToolCalls = append(sm.ToolCalls, session.StoredToolCall{ID: tc.ID, Name: tc.Function.Name, Args: tc.Function.Arguments})
+		}
+		out = append(out, sm)
+	}
+	return out
 }
 
 // ---- command handlers ----
