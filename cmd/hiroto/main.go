@@ -36,12 +36,13 @@ import (
 
 // ---------- styles (Hiroto-skin-inspired palette) ----------
 var (
-	cPrimary = lipgloss.Color("#E8A33D") // warm gold like Hiroto's default skin
-	cMuted   = lipgloss.Color("#6E6A5E")
-	cUser    = lipgloss.Color("#7FB4E8")
-	cTool    = lipgloss.Color("#8FBF7F")
-	cErr     = lipgloss.Color("#E06C60")
-	cBgFaint = lipgloss.Color("#3A3630")
+	cPrimary  = lipgloss.Color("#E8A33D") // warm gold like Hiroto's default skin
+	cMuted    = lipgloss.Color("#6E6A5E")
+	cUser     = lipgloss.Color("#7FB4E8")
+	cTool     = lipgloss.Color("#8FBF7F")
+	cErr      = lipgloss.Color("#E06C60")
+	cBgFaint  = lipgloss.Color("#3A3630")
+	cBackdrop = lipgloss.Color("#141210")
 
 	stBanner  = lipgloss.NewStyle().Bold(true).Foreground(cPrimary)
 	stUserTag = lipgloss.NewStyle().Bold(true).Foreground(cUser)
@@ -557,7 +558,13 @@ func (m model) View() string {
 		stHelp.Render("Enter kirim • Ctrl+P model • Ctrl+R sesi • Ctrl+S simpan • Ctrl+L bersih • ↑↓ history • PgUp/Dn scroll • Ctrl+C keluar"),
 	)
 	if m.picker != nil {
-		return m.renderPicker()
+		box := m.renderPicker()
+		// center the modal over a dimmed backdrop (Hermes-style overlay)
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			box,
+			lipgloss.WithWhitespaceBackground(cBackdrop),
+		)
 	}
 	// Auto-suggest: show available slash commands when typing /
 	if strings.HasPrefix(m.input.Value(), "/") && !strings.Contains(m.input.Value(), " ") {

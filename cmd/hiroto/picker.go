@@ -125,11 +125,14 @@ func (m *model) renderPicker() string {
 	}
 	const win = 12
 	var b strings.Builder
-	title := p.title
-	if p.filter != "" {
-		title += "  (cari: " + p.filter + ")"
+	b.WriteString(pkTitle.Render(p.title) + "\n")
+
+	// search input line (always visible, shows query + caret)
+	search := p.filter
+	if search == "" {
+		search = "ketik untuk cari…"
 	}
-	b.WriteString(pkTitle.Render(title) + "\n")
+	b.WriteString("  " + pkItem.Render(search) + "▌\n")
 
 	if len(p.items) == 0 {
 		b.WriteString(pkItem.Render("  (tidak ada hasil)") + "\n")
