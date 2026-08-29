@@ -2,9 +2,12 @@
 
 > Personal AI agent — terminal-native, Go-powered, cybersecurity-ready.
 
-[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/hirotomasato/hiroto)
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
+[![Version](https://img.shields.io/github/v/release/hirotomasato/hiroto?color=blue)](https://github.com/hirotomasato/hiroto/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/hirotomasato/hiroto/ci.yml?branch=main)](https://github.com/hirotomasato/hiroto/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Lines](https://img.shields.io/badge/lines-5.0k-orange)](https://github.com/hirotomasato/hiroto)
+[![Skills](https://img.shields.io/badge/skills-234-purple)](https://github.com/hirotomasato/hiroto)
 
 Hiroto is a personal AI agent that lives in your terminal. Built in Go with a modern TUI, it connects to any OpenAI-compatible LLM and gives you 32 built-in tools — from running shell commands to full browser automation, from Python/JS execution to cybersecurity reconnaissance.
 
