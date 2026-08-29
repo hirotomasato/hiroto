@@ -61,6 +61,16 @@ echo -e "${GREEN}[3/5]${NC} Setting up ~/.hiroto/..."
 
 mkdir -p "$CONFIG_DIR" "$SKILLS_DIR" "$CONFIG_DIR/sessions" "$CONFIG_DIR/memory"
 
+# Copy skills from repo if available
+if [ -d "skills" ] && [ "$(ls -A skills 2>/dev/null)" ]; then
+    echo "  Copying skills..."
+    cp -r skills/* "$SKILLS_DIR/" 2>/dev/null
+    echo "  Skills: $(find "$SKILLS_DIR" -name SKILL.md | wc -l) files"
+elif [ ! "$(ls -A "$SKILLS_DIR" 2>/dev/null)" ]; then
+    echo "  Downloading skills from GitHub..."
+    curl -fsSL "https://api.github.com/repos/hirotomasato/hiroto/tarball/main" | tar xz --strip=2 "hirotomasato-hiroto-*/skills/" -C "$SKILLS_DIR" 2>/dev/null || echo "  Skills: download skipped (will be empty)"
+fi
+
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
     cat > "$CONFIG_DIR/config.yaml" << 'YEOF'
 model:
