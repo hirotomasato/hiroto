@@ -1,6 +1,6 @@
 # Hiroto
 
-> AI agent yang tinggal di terminal kamu. Tulis kode, scan bug, otomatisasi workflow — semua dari command line.
+> Your terminal, your agent. Write code, hunt bugs, automate workflows — all from the command line.
 
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
 [![Version](https://img.shields.io/github/v/release/hirotomasato/hiroto?color=blue)](https://github.com/hirotomasato/hiroto/releases)
@@ -9,25 +9,31 @@
 
 ---
 
-## Apa ini
+## What is this
 
-Hiroto adalah agen AI yang jalan di terminal. Bukan chatbot biasa — dia bisa jalanin shell command, buka browser, scan kode, cari bug, bikin laporan, dan nyambung ke Telegram. Semua dari keyboard.
+Hiroto is an AI agent that lives in your terminal. Not a web chatbot — it runs shell commands, opens browsers, scans code, hunts bugs, writes reports, and connects to Telegram. All from your keyboard.
 
-Ditulis dari nol pake Go. Ga ada dependency Python buat core-nya. Binary 24MB, jalan di Linux, Mac, dan ARM.
+Written from scratch in Go. No Python runtime needed for the core. 24MB binary, runs on Linux, macOS, and Windows.
 
 ---
 
 ## Install
 
-Satu command:
+One command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hirotomasato/hiroto/main/install.sh | bash
 ```
 
-Itu install Hiroto, 10+ security tools, 240 skills, dan bikin config — otomatis. Butuh Go 1.23+, Node.js, Python 3, sama Chrome.
+That installs Hiroto, 10+ security tools, and 240 skills automatically. You need Go 1.23+, Node.js, Python 3, and Chrome.
 
-Atau clone manual:
+Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/hirotomasato/hiroto/main/install.ps1 | iex
+```
+
+Or clone and build:
 
 ```bash
 git clone https://github.com/hirotomasato/hiroto.git
@@ -35,52 +41,52 @@ cd hiroto
 make install
 ```
 
-Config ada di `~/.hiroto/config.yaml`. API key di `~/.hiroto/.env`.
+Config lives in `~/.hiroto/config.yaml`. API key goes in `~/.hiroto/.env`.
 
 ---
 
-## Cara pakai
+## Usage
 
 ```bash
-hiroto                  # TUI interaktif
-hiroto -q "siapa aku?"  # One-shot, langsung jawab
-hiroto gateway          # Jalanin Telegram bot
-hiroto --update         # Cek update
+hiroto                  # Interactive TUI
+hiroto -q "who am i?"   # One-shot, prints answer
+hiroto gateway          # Telegram bot
+hiroto --update         # Check for updates
 ```
 
-Di TUI, semua dari keyboard:
+In the TUI, everything is keyboard-driven:
 
-| Tombol | Buat apa |
-|--------|----------|
-| `Enter` | Kirim pesan |
-| `Ctrl+P` | Ganti model |
-| `Ctrl+R` | Lanjutin sesi lama |
-| `Ctrl+L` | Bersihin layar |
-| `Ctrl+S` | Simpan sesi |
-| `Ctrl+C` | Batal / keluar |
-| `PgUp` `PgDn` | Scroll naik-turun |
+| Key | What it does |
+|-----|-------------|
+| `Enter` | Send message |
+| `Ctrl+P` | Switch model |
+| `Ctrl+R` | Resume an old session |
+| `Ctrl+L` | Clear screen |
+| `Ctrl+S` | Force save session |
+| `Ctrl+C` | Cancel / quit |
+| `PgUp` `PgDn` | Scroll up and down |
 
 Slash commands: `/help /new /resume /compress /update /upgrade /model /memory /todo /quit`
 
 ---
 
-## Yang bisa dia lakuin
+## What it can do
 
-**Terminal & file:** jalanin shell command, baca/tulis/edit file, background process, pipe chaining.
+**Terminal & files:** run shell commands, read, write, edit files, background processes, pipe chaining.
 
-**Browser:** buka halaman, klik, ketik, ambil teks, screenshot. Full session Chrome headless. Bisa login, isi form, scrape.
+**Browser:** open pages, click, type, extract text, screenshot. Full Chrome headless session. Log in, fill forms, scrape.
 
-**Kode:** jalanin JavaScript (Node) atau Python langsung dari chat. Script bisa panggil balik tool Hiroto.
+**Code:** run JavaScript (Node) or Python directly from chat. Scripts can call back into Hiroto's tools.
 
-**Security:** scan secret, cari pengetahuan dari 240 skill (recon, exploit, reporting), merge laporan, aggregate findings.
+**Security:** scan for secrets, search 240 skills (recon, exploit, reporting), merge reports, aggregate findings.
 
-**Data:** web search, ekstrak konten halaman, cari di sesi lama, baca gambar.
+**Data:** web search, extract page content, search old sessions, read images.
 
-**Otomatisasi:** cronjob buat tugas berulang, delegate task ke sub-agent, Telegram bot gateway.
+**Automation:** cron jobs for recurring tasks, delegate work to sub-agents, Telegram bot gateway.
 
 ---
 
-## Tools bawaan
+## Built-in tools
 
 ```
 terminal    read_file    write_file    patch    search_files
@@ -99,21 +105,35 @@ session_search  vision_analyze    clarify
 
 ## Skills
 
-240 skill siap pakai. Tinggal sebut nama skill-nya, agent bakal load dan jalanin.
+240 skills included. Mention a skill name and the agent loads and runs it.
 
 ```
 recon     → subfinder + dnsx + httpx
-hunt-xss  → 174 pola bug bounty XSS
+hunt-xss  → 174 XSS bug bounty patterns
 hunt-sqli → SQL injection hunting
-antislop  → filter anti AI-slop buat output
-...dan 236 lainnya
+antislop  → anti-AI-slop output filter
+...and 236 more
 ```
 
 ---
 
-## Kenapa Go
+## Project layout
 
-Binary 24MB, ga perlu runtime, ga perlu venv, ga perlu Docker. Build sekali, jalan di mana aja. Cross-compile ke Linux/Mac/ARM dari laptop.
+```
+cmd/hiroto/          Entry point: TUI, one-shot, gateway
+internal/
+  agent/             Agent loop, system prompt, compression
+  llm/               OpenAI-compatible client
+  tools/             Tool implementations + registry
+  skills/            Skill discovery + parser
+  memory/            Persistent memory (JSON)
+  session/           Conversation persistence
+  config/            YAML config + .env resolver
+  web/               Web search + extract
+  plugin/            Plugin loader + MCP client
+  gateway/           Telegram bot
+skills/              240 bundled skills
+```
 
 ---
 
@@ -123,7 +143,7 @@ Binary 24MB, ga perlu runtime, ga perlu venv, ga perlu Docker. Build sekali, jal
 make build    # go build
 make test     # go test ./...
 make vet      # go vet ./...
-make install  # install ke ~/.local/bin
+make install  # install to ~/.local/bin
 ```
 
 ---
@@ -134,4 +154,4 @@ MIT — [LICENSE](LICENSE)
 
 ---
 
-Dibuat dari nol di Go. Ga ada dependency framework AI apa pun. Binary 24MB, 240 skills, 32 tools.
+Built from scratch in Go. 24MB binary. 240 skills. 32 tools. No AI framework dependencies.
