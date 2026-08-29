@@ -18,25 +18,19 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      - name: Go version
-        run: go version
-
-      - name: Build
+      - name: Build linux amd64
         env:
           CGO_ENABLED: "0"
           GOTOOLCHAIN: auto
         run: |
+          set -eux
+          go version
           mkdir -p dist
-          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/hiroto-linux-amd64     ./cmd/hiroto
-          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/hiroto-linux-arm64     ./cmd/hiroto
-          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/hiroto-darwin-amd64    ./cmd/hiroto
-          GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/hiroto-darwin-arm64    ./cmd/hiroto
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/hiroto-windows-amd64.exe ./cmd/hiroto
-          (cd dist && sha256sum * > checksums.txt)
+          go build -trimpath -o dist/hiroto-linux-amd64 ./cmd/hiroto
           ls -lh dist
 
       - uses: softprops/action-gh-release@v2
         with:
           name: Hiroto ${{ github.ref_name }}
           generate_release_notes: true
-          files: dist/*
+          files: dist/hiroto-linux-amd64
