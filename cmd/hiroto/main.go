@@ -117,12 +117,14 @@ type model struct {
 	reasoning string // reasoning effort level
 	flash     string // temporary flash message (error/warning card)
 	flashKind string // "error" or "info"
+	rendered  bool   // track first render for GotoTop
 
 	// Command picker (slash suggestions).
 	cmdPicker struct {
-		active  bool
-		items   []string
-		cursor  int
+		active bool
+		items  []string
+		cursor int
+		kind   string // "cmd" or "model"
 	}
 }
 
@@ -146,6 +148,13 @@ func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *se
 	m.vp.KeyMap = viewport.KeyMap{} // disable default pager keys — we handle scrolling ourselves
 	m.vp.SetContent("")
 	m.banner()
+	// Wire agent events (tool activity, compression, errors) into the TUI
+	// stream so the user sees live progress instead of a frozen screen.
+	ag.Emit = func(e agent.Event) {
+		chMu.Lock()
+		streamCh <- eventMsg(e)
+		chMu.Unlock()
+	}
 	return m
 }
 
@@ -170,9 +179,9 @@ func (m *model) banner() {
 func (m *model) renderAgentEvent(e agent.Event) line {
 	switch e.Type {
 	case "tool_start":
-		return line{lineTool, stToolTag.Render("⚒ "+e.ToolName) + stMuted.Render(" …")}
+		return line{lineTool, stToolTag.Render("⚒ "+toolActivity(e.ToolName, e.ToolArgs)) + stMuted.Render(" …")}
 	case "tool_end":
-		head := stToolTag.Render("⚒ "+e.ToolName) + stMuted.Render(fmt.Sprintf(" (%.1fs)", e.Duration.Seconds()))
+		head := stToolTag.Render("✓ "+toolActivity(e.ToolName, e.ToolArgs)) + stMuted.Render(fmt.Sprintf(" (%.1fs)", e.Duration.Seconds()))
 		body := e.Text
 		// Verbose: 0=compact (first few lines), 1=full, 2=log (all)
 		if m.verbose == 0 {
@@ -195,6 +204,117 @@ func (m *model) renderAgentEvent(e agent.Event) line {
 
 func indent(s, pad string) string {
 	return pad + strings.ReplaceAll(s, "\n", "\n"+pad)
+}
+
+// toolActivity turns a tool call into a short, natural activity phrase —
+// Hermes-style ("Reading main.go", "Running the tests") — so the user sees
+// WHAT is happening in plain language, not just the raw tool name.
+//
+// If the model supplied an "activity" arg (its own present-tense narration),
+// that wins. Otherwise we derive a label from the tool name + key argument.
+func toolActivity(name, rawArgs string) string {
+	args := map[string]any{}
+	if rawArgs != "" {
+		_ = json.Unmarshal([]byte(rawArgs), &args)
+	}
+	str := func(k string) string {
+		if v, ok := args[k].(string); ok {
+			return v
+		}
+		return ""
+	}
+	// Model-authored narration takes priority (Hermes-style dynamic label).
+	if a := strings.TrimSpace(str("activity")); a != "" {
+		if len(a) > 56 {
+			a = a[:56] + "…"
+		}
+		return a
+	}
+	first := func(keys ...string) string {
+		for _, k := range keys {
+			if v := str(k); v != "" {
+				return v
+			}
+			// arrays (e.g. web_extract "urls"): take the first element
+			if arr, ok := args[k].([]any); ok && len(arr) > 0 {
+				if s, ok := arr[0].(string); ok && s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+	clip := func(s string, n int) string {
+		s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+		if len(s) > n {
+			return s[:n] + "…"
+		}
+		return s
+	}
+	base := func(p string) string {
+		if p == "" {
+			return ""
+		}
+		return filepath.Base(p)
+	}
+
+	switch name {
+	case "read_file":
+		return join("Reading", base(str("path")))
+	case "write_file":
+		return join("Writing", base(str("path")))
+	case "patch":
+		return join("Editing", base(str("path")))
+	case "search_files":
+		q := clip(str("pattern"), 32)
+		if str("target") == "files" {
+			return join("Finding files", q)
+		}
+		return join("Searching", q)
+	case "terminal":
+		return join("Running", clip(str("command"), 44))
+	case "execute_code", "execute_python":
+		return "Running script"
+	case "process":
+		return join("Process:", str("action"))
+	case "skill_view":
+		return join("Opening skill", str("name"))
+	case "skill_manage":
+		return join("Skill:", str("action"))
+	case "web_search":
+		return join("Searching web", clip(str("query"), 40))
+	case "web_extract", "web_fetch":
+		return join("Fetching", clip(first("urls", "url"), 44))
+	case "browser_navigate":
+		return join("Opening", clip(str("url"), 44))
+	case "browser_click":
+		return "Clicking element"
+	case "browser_type":
+		return "Typing in browser"
+	case "browser_fetch", "browser_exec":
+		return "Browser automation"
+	case "browser_screenshot", "browser_screenshot_cdp":
+		return "Browser screenshot"
+	case "memory":
+		return join("Memory:", str("action"))
+	case "todo":
+		return "Updating todos"
+	case "session_search":
+		return join("Searching sessions", clip(str("query"), 40))
+	}
+	// Unknown tool: show the tool name + first meaningful arg.
+	if d := clip(first("path", "query", "name", "command", "url"), 40); d != "" {
+		return name + " " + d
+	}
+	return name
+}
+
+// join concatenates a verb and detail, dropping the detail when empty.
+func join(verb, detail string) string {
+	if detail == "" {
+		return verb
+	}
+	return verb + " " + detail
 }
 
 func minInt(a, b int) int {
@@ -256,7 +376,7 @@ func waitForClarify() tea.Cmd {
 // ---------- bubbletea update ----------
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tea.SetWindowTitle("◆ hiroto"), textarea.Blink, waitForActivity(), waitForClarify())
+	return tea.Batch(tea.SetWindowTitle("◆ hiroto"), textarea.Blink, m.spinner.Tick, waitForActivity(), waitForClarify())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -280,6 +400,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refresh()
 
+	case tea.MouseMsg:
+		// Mouse wheel scrolls the transcript viewport (3 lines per notch).
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.vp.LineUp(3)
+			m.refresh()
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.vp.LineDown(3)
+			m.refresh()
+			return m, nil
+		}
+
 	case tea.KeyMsg:
 		// Command picker intercepts keys first.
 		if m.cmdPicker.active {
@@ -296,7 +429,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				if m.cmdPicker.cursor >= 0 && m.cmdPicker.cursor < len(m.cmdPicker.items) {
-					m.input.SetValue(m.cmdPicker.items[m.cmdPicker.cursor] + " ")
+					switch m.cmdPicker.kind {
+					case "model":
+						m.input.SetValue("/model " + m.cmdPicker.items[m.cmdPicker.cursor])
+					case "file":
+						m.input.SetValue("@file:" + m.cmdPicker.items[m.cmdPicker.cursor] + " ")
+					case "folder":
+						m.input.SetValue("@folder:" + m.cmdPicker.items[m.cmdPicker.cursor] + " ")
+					default:
+						m.input.SetValue(m.cmdPicker.items[m.cmdPicker.cursor] + " ")
+					}
 				}
 				m.cmdPicker.active = false
 				return m, nil
@@ -304,8 +446,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cmdPicker.active = false
 				return m, nil
 			default:
-				// Any other key closes the picker and passes through.
-				m.cmdPicker.active = false
+				// Pass through to textarea for filtering (type more letters).
+				// Don't close the picker here — it auto-closes when input has a space.
 			}
 		}
 
@@ -417,11 +559,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		m.streaming = false
-		if msg.Type == "tool_start" {
-			m.lines = append(m.lines, m.renderAgentEvent(msg))
-		} else if msg.Type == "tool_end" {
-			m.lines = append(m.lines, m.renderAgentEvent(msg))
-		} else if msg.Type == "error" {
+		switch msg.Type {
+		case "tool_start", "tool_end", "error", "compress_start", "compress_end":
 			m.lines = append(m.lines, m.renderAgentEvent(msg))
 		}
 		m.refresh()
@@ -448,6 +587,84 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var c1, c2 tea.Cmd
 	m.input, c1 = m.input.Update(msg)
 	m.spinner, c2 = m.spinner.Update(msg)
+
+	// Command picker: activate/deactivate based on input state.
+	val := m.input.Value()
+	// @file: picker — show matching files.
+	if strings.HasPrefix(val, "@file:") {
+		prefix := strings.TrimPrefix(val, "@file:")
+		files := matchingFiles(prefix, m.ag.Workdir)
+		if !m.cmdPicker.active || m.cmdPicker.kind != "file" {
+			m.cmdPicker.active = true
+			m.cmdPicker.kind = "file"
+			m.cmdPicker.items = files
+			m.cmdPicker.cursor = 0
+		} else {
+			if len(m.cmdPicker.items) != len(files) {
+				m.cmdPicker.cursor = 0
+			}
+			m.cmdPicker.items = files
+			if m.cmdPicker.cursor >= len(files) {
+				m.cmdPicker.cursor = 0
+			}
+		}
+	} else if strings.HasPrefix(val, "@folder:") {
+		prefix := strings.TrimPrefix(val, "@folder:")
+		dirs := matchingDirs(prefix, m.ag.Workdir)
+		if !m.cmdPicker.active || m.cmdPicker.kind != "folder" {
+			m.cmdPicker.active = true
+			m.cmdPicker.kind = "folder"
+			m.cmdPicker.items = dirs
+			m.cmdPicker.cursor = 0
+		} else {
+			if len(m.cmdPicker.items) != len(dirs) {
+				m.cmdPicker.cursor = 0
+			}
+			m.cmdPicker.items = dirs
+			if m.cmdPicker.cursor >= len(dirs) {
+				m.cmdPicker.cursor = 0
+			}
+		}
+	} else if strings.HasPrefix(val, "/model ") || val == "/model" {
+		prefix := ""
+		if strings.HasPrefix(val, "/model ") {
+			prefix = strings.TrimPrefix(val, "/model ")
+		}
+		models := matchingModels(prefix, m.cfg)
+		if !m.cmdPicker.active || m.cmdPicker.kind != "model" {
+			m.cmdPicker.active = true
+			m.cmdPicker.kind = "model"
+			m.cmdPicker.items = models
+			m.cmdPicker.cursor = 0
+		} else {
+			if len(m.cmdPicker.items) != len(models) {
+				m.cmdPicker.cursor = 0
+			}
+			m.cmdPicker.items = models
+			if m.cmdPicker.cursor >= len(models) {
+				m.cmdPicker.cursor = 0
+			}
+		}
+	} else if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
+		matches := matchingCommands(val)
+		if !m.cmdPicker.active || m.cmdPicker.kind != "cmd" {
+			m.cmdPicker.active = true
+			m.cmdPicker.kind = "cmd"
+			m.cmdPicker.items = matches
+			m.cmdPicker.cursor = 0
+		} else {
+			if len(m.cmdPicker.items) != len(matches) {
+				m.cmdPicker.cursor = 0
+			}
+			m.cmdPicker.items = matches
+			if m.cmdPicker.cursor >= len(matches) {
+				m.cmdPicker.cursor = 0
+			}
+		}
+	} else {
+		m.cmdPicker.active = false
+		m.cmdPicker.kind = ""
+	}
 	// Viewport no longer handles keys — we do it explicitly via PgUp/Dn/Home/End.
 	cmds = append(cmds, c1, c2)
 	return m, tea.Batch(cmds...)
@@ -585,7 +802,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
-				m.flashMsg("editor: " + err.Error(), "error")
+				m.flashMsg("editor: "+err.Error(), "error")
 			} else {
 				data, _ := os.ReadFile(tmp.Name())
 				text := strings.TrimSpace(string(data))
@@ -663,7 +880,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				imgPath := strings.Join(fields[1:], " ")
 				data, err := os.ReadFile(imgPath)
 				if err != nil {
-					m.flashMsg("gagal baca: " + err.Error(), "error")
+					m.flashMsg("gagal baca: "+err.Error(), "error")
 				} else {
 					// Add as user message with image content (base64 data URL).
 					b64 := encodeBase64(data)
@@ -756,7 +973,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			prompt := "Run the test suite for this project. If tests fail, debug the failures, fix the code, and re-run until all tests pass. Report the final result."
 			m.runTurn(prompt)
 		default:
-			m.flashMsg("perintah tidak dikenal: " + fields[0], "error")
+			m.flashMsg("perintah tidak dikenal: "+fields[0], "error")
 		}
 		m.input.Reset()
 		m.refresh()
@@ -826,7 +1043,11 @@ func (m *model) refresh() {
 	}
 	atBottom := m.vp.AtBottom()
 	m.vp.SetContent(content)
-	if atBottom {
+	// On first render (viewport height 20), scroll to top so banner is visible.
+	if !m.rendered {
+		m.vp.GotoTop()
+		m.rendered = true
+	} else if atBottom {
 		m.vp.GotoBottom()
 	}
 }
@@ -878,7 +1099,7 @@ func (m model) View() string {
 		flashBar,
 		stInput.Render(m.input.View()),
 		statusBar,
-		stHelp.Render("Enter kirim • Ctrl+P model • Ctrl+R sesi • Ctrl+S simpan • Ctrl+L bersih • ↑↓ history • PgUp/Dn scroll • Ctrl+C keluar"),
+		stHelp.Render("Enter kirim • Ctrl+P model • Ctrl+R sesi • Ctrl+S simpan • Ctrl+L bersih • ↑↓ history • scroll/PgUp-Dn geser • Ctrl+C keluar"),
 	)
 	if m.picker != nil {
 		box := m.renderPicker()
@@ -890,26 +1111,38 @@ func (m model) View() string {
 		)
 	}
 	// Auto-suggest: show available slash commands when typing /
-	if strings.HasPrefix(m.input.Value(), "/") && !strings.Contains(m.input.Value(), " ") {
-		matches := matchingCommands(m.input.Value())
-		if !m.cmdPicker.active {
-			m.cmdPicker.active = true
-			m.cmdPicker.items = matches
-			m.cmdPicker.cursor = 0
-		} else {
-			m.cmdPicker.items = matches
-			if m.cmdPicker.cursor >= len(matches) {
-				m.cmdPicker.cursor = 0
-			}
-		}
+	if strings.HasPrefix(m.input.Value(), "@file:") {
+		matches := matchingFiles(strings.TrimPrefix(m.input.Value(), "@file:"), m.ag.Workdir)
 		if len(matches) > 0 {
-			suggest := renderCmdPicker(m.cmdPicker.items, m.cmdPicker.cursor)
+			suggest := renderCmdPicker(matches, m.cmdPicker.cursor, len(m.cmdPicker.items) != len(matches))
 			if suggest != "" {
 				body = lipgloss.JoinVertical(lipgloss.Left, body, suggest)
 			}
 		}
-	} else {
-		m.cmdPicker.active = false
+	} else if strings.HasPrefix(m.input.Value(), "@folder:") {
+		matches := matchingDirs(strings.TrimPrefix(m.input.Value(), "@folder:"), m.ag.Workdir)
+		if len(matches) > 0 {
+			suggest := renderCmdPicker(matches, m.cmdPicker.cursor, len(m.cmdPicker.items) != len(matches))
+			if suggest != "" {
+				body = lipgloss.JoinVertical(lipgloss.Left, body, suggest)
+			}
+		}
+	} else if strings.HasPrefix(m.input.Value(), "/model ") || m.input.Value() == "/model" {
+		matches := matchingModels(strings.TrimPrefix(m.input.Value(), "/model "), m.cfg)
+		if len(matches) > 0 {
+			suggest := renderCmdPicker(matches, m.cmdPicker.cursor, len(m.cmdPicker.items) != len(matches))
+			if suggest != "" {
+				body = lipgloss.JoinVertical(lipgloss.Left, body, suggest)
+			}
+		}
+	} else if strings.HasPrefix(m.input.Value(), "/") && !strings.Contains(m.input.Value(), " ") {
+		matches := matchingCommands(m.input.Value())
+		if len(matches) > 0 {
+			suggest := renderCmdPicker(matches, m.cmdPicker.cursor, len(m.cmdPicker.items) != len(matches))
+			if suggest != "" {
+				body = lipgloss.JoinVertical(lipgloss.Left, body, suggest)
+			}
+		}
 	}
 	return body
 }
@@ -1024,7 +1257,7 @@ func main() {
 	tools.ClarifyChan = make(chan tools.ClarifyRequest, 1)
 
 	setWindowTitle()
-	p := tea.NewProgram(initialModel(cfg, ag, mem, ss), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(cfg, ag, mem, ss), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "hiroto:", err)
 		os.Exit(1)
@@ -1050,6 +1283,15 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 		CompressKeepTurns: cfg.Agent.CompressKeepTurns,
 		RetryAttempts:     2,
 		Workdir:           workdir(),
+	}
+	// Fetch model list from API for the picker.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if models, err := ag.Client.ListModels(ctx); err == nil && len(models) > 0 {
+		cfg.Model.Available = models
+	} else if err != nil {
+		// Log but don't block — picker will fall back to live fetch.
+		log.Printf("[hiroto] model list fetch: %v", err)
 	}
 	reg := tools.NewRegistry()
 	tools.RegisterBuiltin(reg, tools.Options{
@@ -1231,6 +1473,70 @@ func (a *llmAdapter) Chat(ctx context.Context, messages []tools.LLMMessage) (str
 	return "", fmt.Errorf("no content in response")
 }
 
+// matchingModels returns available models matching the prefix.
+func matchingModels(prefix string, cfg *config.Config) []string {
+	var models []string
+	if cfg.Model.Available != nil {
+		models = cfg.Model.Available
+	} else {
+		models = []string{cfg.Model.Name}
+	}
+	prefix = strings.ToLower(prefix)
+	var matches []string
+	for _, m := range models {
+		if prefix == "" || strings.Contains(strings.ToLower(m), prefix) {
+			matches = append(matches, m)
+		}
+	}
+	return matches
+}
+
+// matchingFiles returns files in workdir matching the prefix.
+func matchingFiles(prefix, workdir string) []string {
+	entries, err := os.ReadDir(workdir)
+	if err != nil {
+		return nil
+	}
+	prefix = strings.ToLower(prefix)
+	var matches []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if prefix == "" || strings.Contains(strings.ToLower(name), prefix) {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) > 20 {
+		matches = matches[:20]
+	}
+	return matches
+}
+
+// matchingDirs returns directories in workdir matching the prefix.
+func matchingDirs(prefix, workdir string) []string {
+	entries, err := os.ReadDir(workdir)
+	if err != nil {
+		return nil
+	}
+	prefix = strings.ToLower(prefix)
+	var matches []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name() + "/"
+		if prefix == "" || strings.Contains(strings.ToLower(name), prefix) {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) > 20 {
+		matches = matches[:20]
+	}
+	return matches
+}
+
 // matchingCommands returns slash commands that match the prefix.
 func matchingCommands(prefix string) []string {
 	all := []string{
@@ -1252,9 +1558,12 @@ func matchingCommands(prefix string) []string {
 }
 
 // renderCmdPicker draws the scrollable command picker card.
-func renderCmdPicker(items []string, cursor int) string {
+func renderCmdPicker(items []string, cursor int, fresh bool) string {
 	if len(items) == 0 {
 		return ""
+	}
+	if fresh && cursor >= len(items) {
+		cursor = 0
 	}
 	const win = 10
 	var b strings.Builder
@@ -1399,7 +1708,7 @@ func (m *model) handleRollback(fields []string) {
 		hash := fields[2]
 		out, err := exec.Command("git", "-C", m.ag.Workdir, "reset", "--hard", hash).CombinedOutput()
 		if err != nil {
-			m.flashMsg("rollback gagal: " + string(out), "error")
+			m.flashMsg("rollback gagal: "+string(out), "error")
 		} else {
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render("rollback ke " + hash + " — file dikembalikan")})
 		}

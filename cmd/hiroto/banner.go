@@ -113,7 +113,8 @@ func bannerLines(width int, modelInfo string, skillCount int) []string {
 	rule := rules(width)
 
 	var out []string
-	out = append(out, rule) // top rule, mirrors the bottom one
+	out = append(out, "")   // breathing room above the banner
+	out = append(out, rule) // top rule
 
 	bannerW := ruleWidth(width)
 	if width >= 60 {
