@@ -21,10 +21,24 @@ jobs:
       - name: Build
         run: CGO_ENABLED=0 go build -o hiroto-linux-amd64 ./cmd/hiroto
 
-      - name: Upload Release
+      - name: Create Release
         run: |
-          gh release create "${{ github.ref_name }}" hiroto-linux-amd64 \
-            --title "Hiroto ${{ github.ref_name }}" \
-            --generate-notes
-        env:
-          GH_TOKEN: ${{ github.token }}
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
+            -d "{
+              \"tag_name\": \"${{ github.ref_name }}\",
+              \"name\": \"Hiroto ${{ github.ref_name }}\",
+              \"generate_release_notes\": true
+            }" > release.json
+          cat release.json
+
+      - name: Upload Asset
+        run: |
+          UPLOAD_URL=$(cat release.json | jq -r .upload_url | sed 's/{.*}//')
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/octet-stream" \
+            "$UPLOAD_URL?name=hiroto-linux-amd64" \
+            --data-binary @hiroto-linux-amd64
