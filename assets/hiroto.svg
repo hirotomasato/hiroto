@@ -1,43 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-label="Hiroto — personal agent · go core · cyberteam">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="Hiroto">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#12100C"/>
-      <stop offset="55%" stop-color="#0B0A08"/>
-      <stop offset="100%" stop-color="#16120E"/>
+      <stop offset="0%" stop-color="#1A1610"/>
+      <stop offset="100%" stop-color="#0C0B09"/>
     </linearGradient>
-    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0%" stop-color="#F2C14E"/>
-      <stop offset="55%" stop-color="#E8A33D"/>
       <stop offset="100%" stop-color="#E0592A"/>
     </linearGradient>
-    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#E8A33D" stop-opacity="0"/>
-      <stop offset="18%" stop-color="#E8A33D" stop-opacity=".85"/>
-      <stop offset="82%" stop-color="#E0592A" stop-opacity=".85"/>
-      <stop offset="100%" stop-color="#E0592A" stop-opacity="0"/>
-    </linearGradient>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M32 0H0V32" fill="none" stroke="#E8A33D" stroke-opacity=".05" stroke-width="1"/>
-    </pattern>
-    <radialGradient id="glow" cx="28%" cy="42%" r="55%">
-      <stop offset="0%" stop-color="#E8A33D" stop-opacity=".16"/>
-      <stop offset="100%" stop-color="#E8A33D" stop-opacity="0"/>
-    </radialGradient>
   </defs>
 
-  <rect width="1280" height="420" fill="url(#bg)"/>
-  <rect width="1280" height="420" fill="url(#grid)"/>
-  <rect width="1280" height="420" fill="url(#glow)"/>
-  <rect x="0" y="0" width="6" height="420" fill="#E8A33D"/>
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <rect x="0" y="0" width="10" height="320" fill="#E8A33D"/>
+  <rect x="0" y="312" width="1280" height="8" fill="url(#gold)"/>
 
-  <!-- HR chip -->
-  <rect x="72" y="148" width="72" height="72" rx="10" fill="#E8A33D"/>
-  <text x="108" y="196" text-anchor="middle" font-family="Inter, DejaVu Sans, sans-serif" font-size="32" font-weight="800" fill="#161310" letter-spacing="1">HR</text>
+  <rect x="48" y="108" width="88" height="88" rx="14" fill="#E8A33D"/>
+  <text x="92" y="168" text-anchor="middle" font-family="DejaVu Sans" font-size="40" font-weight="700" fill="#161310">HR</text>
 
-  <text x="168" y="206" font-family="Inter, DejaVu Sans, sans-serif" font-size="86" font-weight="800" fill="url(#word)" letter-spacing="4">HIROTO</text>
+  <text x="160" y="148" font-family="DejaVu Sans" font-size="58" font-weight="700" fill="#F2C14E">HIROTO</text>
+  <text x="160" y="188" font-family="DejaVu Sans" font-size="20" fill="#E4D4B8">personal agent · go core · cyberteam</text>
+  <text x="160" y="220" font-family="DejaVu Sans Mono" font-size="16" fill="#C4B49A">v0.4.1 · masantoid</text>
 
-  <rect x="72" y="248" width="720" height="1.5" fill="url(#line)"/>
-
-  <text x="72" y="292" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="20" fill="#B7A48A" letter-spacing="3">personal agent  ·  go core  ·  cyberteam</text>
-  <text x="72" y="328" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="15" fill="#6F6558">v0.4.1  ·  masantoid  ·  32 tools  ·  240 skills</text>
+  <rect x="760" y="72" width="468" height="176" rx="12" fill="#12100C" stroke="#E8A33D" stroke-width="2"/>
+  <text x="788" y="118" font-family="DejaVu Sans Mono" font-size="18" fill="#E8A33D">$ hiroto</text>
+  <text x="788" y="154" font-family="DejaVu Sans" font-size="18" fill="#F3EAD8">terminal · browser · recon</text>
+  <text x="788" y="188" font-family="DejaVu Sans" font-size="18" fill="#F3EAD8">32 tools · 240 skills</text>
+  <text x="788" y="222" font-family="DejaVu Sans Mono" font-size="15" fill="#D0C0A4">single binary · no runtime</text>
 </svg>
