@@ -1,0 +1,30 @@
+name: Bug
+description: Something is broken
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      placeholder: Actual vs expected.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "hiroto --banner  (or git SHA)"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / Go
+      placeholder: "Zorin 18, go 1.26.2"
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      placeholder: Exact command or TUI steps.
+    validations:
+      required: true

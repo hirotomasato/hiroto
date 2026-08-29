@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-label="Hiroto — personal agent · go core · cyberteam">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#12100C"/>
+      <stop offset="55%" stop-color="#0B0A08"/>
+      <stop offset="100%" stop-color="#16120E"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#F2C14E"/>
+      <stop offset="55%" stop-color="#E8A33D"/>
+      <stop offset="100%" stop-color="#E0592A"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#E8A33D" stop-opacity="0"/>
+      <stop offset="18%" stop-color="#E8A33D" stop-opacity=".85"/>
+      <stop offset="82%" stop-color="#E0592A" stop-opacity=".85"/>
+      <stop offset="100%" stop-color="#E0592A" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#E8A33D" stroke-opacity=".05" stroke-width="1"/>
+    </pattern>
+    <radialGradient id="glow" cx="28%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#E8A33D" stop-opacity=".16"/>
+      <stop offset="100%" stop-color="#E8A33D" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="420" fill="url(#bg)"/>
+  <rect width="1280" height="420" fill="url(#grid)"/>
+  <rect width="1280" height="420" fill="url(#glow)"/>
+  <rect x="0" y="0" width="6" height="420" fill="#E8A33D"/>
+
+  <!-- HR chip -->
+  <rect x="72" y="148" width="72" height="72" rx="10" fill="#E8A33D"/>
+  <text x="108" y="196" text-anchor="middle" font-family="Inter, DejaVu Sans, sans-serif" font-size="32" font-weight="800" fill="#161310" letter-spacing="1">HR</text>
+
+  <text x="168" y="206" font-family="Inter, DejaVu Sans, sans-serif" font-size="86" font-weight="800" fill="url(#word)" letter-spacing="4">HIROTO</text>
+
+  <rect x="72" y="248" width="720" height="1.5" fill="url(#line)"/>
+
+  <text x="72" y="292" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="20" fill="#B7A48A" letter-spacing="3">personal agent  ·  go core  ·  cyberteam</text>
+  <text x="72" y="328" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="15" fill="#6F6558">v0.4.1  ·  masantoid  ·  32 tools  ·  240 skills</text>
+</svg>

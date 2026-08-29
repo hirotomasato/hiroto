@@ -1,7 +1,7 @@
 # Hiroto
 
 <p align="center">
-  <img src="assets/hiroto.png" alt="Hiroto" width="400">
+  <img src="assets/hiroto.svg" alt="Hiroto — personal agent · go core · cyberteam" width="720">
 </p>
 
 > Your terminal, your agent. Write code, hunt bugs, automate workflows — all from the command line.
@@ -10,6 +10,7 @@
 [![Version](https://img.shields.io/github/v/release/hirotomasato/hiroto?color=blue)](https://github.com/hirotomasato/hiroto/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hirotomasato/hiroto/ci.yml?branch=main)](https://github.com/hirotomasato/hiroto/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Go Report](https://goreportcard.com/badge/github.com/hirotomasato/hiroto)](https://goreportcard.com/report/github.com/hirotomasato/hiroto)
 
 ---
 
@@ -159,6 +160,8 @@ make test     # go test ./...
 make vet      # go vet ./...
 make install  # install to ~/.local/bin
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.md](SECURITY.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions / questions
+    url: https://github.com/hirotomasato/hiroto/issues/new
+    about: For usage questions, pick Feature request and say it's a question.
