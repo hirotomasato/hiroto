@@ -39,11 +39,35 @@ func sessionIDFor(chatID int64) string {
 
 // gw holds the bot runtime state shared across all chats.
 type gw struct {
-	bot   *tgbotapi.BotAPI
-	ag    *agent.Agent
-	mem   *memory.Store
-	sess  *session.Store
-	chats map[int64]*chat
+	bot     *tgbotapi.BotAPI
+	ag      *agent.Agent
+	mem     *memory.Store
+	sess    *session.Store
+	chats   map[int64]*chat
+	cancels map[int64]context.CancelFunc // per-chat cancel for /stop
+	cancMu  sync.Mutex
+}
+
+// registerCommandMenu populates Telegram's "/" command picker (Hermes-style)
+// so users discover commands without typing /help. Best-effort.
+func registerCommandMenu(bot *tgbotapi.BotAPI) {
+	cmds := []tgbotapi.BotCommand{
+		{Command: "new", Description: "Start a new session"},
+		{Command: "model", Description: "Show or switch model"},
+		{Command: "resume", Description: "Resume a saved session"},
+		{Command: "sessions", Description: "List / search sessions"},
+		{Command: "memory", Description: "View or edit memory"},
+		{Command: "skills", Description: "List skills"},
+		{Command: "retry", Description: "Retry the last turn"},
+		{Command: "undo", Description: "Undo the last turn"},
+		{Command: "stop", Description: "Stop the running agent"},
+		{Command: "status", Description: "Session & model info"},
+		{Command: "help", Description: "Show help"},
+	}
+	cfg := tgbotapi.NewSetMyCommands(cmds...)
+	if _, err := bot.Request(cfg); err != nil {
+		log.Printf("[gateway] set command menu: %v", err)
+	}
 }
 
 // Telegram starts a polling bot that forwards messages to the agent.
@@ -55,16 +79,21 @@ func Telegram(token string, ag *agent.Agent) error {
 	bot.Debug = false
 	log.Printf("[gateway] Telegram bot aktif sebagai @%s", bot.Self.UserName)
 
+	// Register the command menu so Telegram's "/" button lists our commands
+	// (Hermes-style). Best-effort — a failure here must not stop the bot.
+	registerCommandMenu(bot)
+
 	mem := ag.Memory
 	if mem == nil {
 		mem = memory.New()
 	}
 	g := &gw{
-		bot:   bot,
-		ag:    ag,
-		mem:   mem,
-		sess:  session.New(),
-		chats: make(map[int64]*chat),
+		bot:     bot,
+		ag:      ag,
+		mem:     mem,
+		sess:    session.New(),
+		chats:   make(map[int64]*chat),
+		cancels: make(map[int64]context.CancelFunc),
 	}
 
 	u := tgbotapi.NewUpdate(0)
@@ -102,6 +131,7 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 			"/skills — daftar skill\n"+
 			"/retry — ulang giliran terakhir\n"+
 			"/undo — batalkan giliran terakhir\n"+
+			"/stop — hentikan agent yang sedang jalan\n"+
 			"/status — info sesi & model\n"+
 			"/help — bantuan", replyTo)
 		return
@@ -115,6 +145,8 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 			"/skills [kata] — cari skill\n"+
 			"/retry — ulang giliran terakhir\n"+
 			"/undo — batalkan giliran terakhir\n"+
+			"/stop — hentikan agent yang sedang jalan\n"+
+			"/compress — ringkas konteks percakapan\n"+
 			"/status — info sesi & model\n"+
 			"/sessions [cari] — cari sesi\n"+
 			"/todo — catat tugas via agent", replyTo)
@@ -155,6 +187,14 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 
 	case "/status":
 		g.handleStatus(chatID, replyTo)
+		return
+
+	case "/stop":
+		g.handleStop(chatID, replyTo)
+		return
+
+	case "/compress":
+		g.handleCompress(chatID, replyTo)
 		return
 
 	case "/sessions":
@@ -511,12 +551,23 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	g.cancMu.Lock()
+	g.cancels[chatID] = cancel
+	g.cancMu.Unlock()
 	answer, err := ag.Run(ctx, text, live.text)
 	cancel()
+	g.cancMu.Lock()
+	delete(g.cancels, chatID)
+	g.cancMu.Unlock()
 	ag.Emit = nil
 	st.messages = ag.Messages
 
 	if err != nil {
+		if ctx.Err() == context.Canceled {
+			live.finish("■ dihentikan")
+			g.saveChat(st)
+			return
+		}
 		live.finish("✗ error: " + err.Error())
 		return
 	}
@@ -525,6 +576,39 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	}
 	g.saveChat(st)
 	live.finish(answer)
+}
+
+// handleStop cancels the agent turn currently running for this chat (if any).
+func (g *gw) handleStop(chatID int64, replyTo int) {
+	g.cancMu.Lock()
+	cancel, ok := g.cancels[chatID]
+	g.cancMu.Unlock()
+	if !ok {
+		send(g.bot, chatID, "tidak ada proses yang sedang jalan", replyTo)
+		return
+	}
+	cancel()
+	send(g.bot, chatID, "■ menghentikan…", replyTo)
+}
+
+// handleCompress summarizes older context for this chat's session.
+func (g *gw) handleCompress(chatID int64, replyTo int) {
+	st, ok := g.chats[chatID]
+	if !ok || len(st.messages) == 0 {
+		send(g.bot, chatID, "belum ada percakapan untuk diringkas", replyTo)
+		return
+	}
+	ag := g.ag
+	ag.Messages = st.messages
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := ag.CompressNow(ctx); err != nil {
+		send(g.bot, chatID, "✗ kompresi gagal: "+err.Error(), replyTo)
+		return
+	}
+	st.messages = ag.Messages
+	g.saveChat(st)
+	send(g.bot, chatID, "✓ konteks diringkas", replyTo)
 }
 
 // lastUserTurn holds the text of the last user message and how many messages
@@ -648,22 +732,49 @@ func (l *live) flushLocked() {
 	}
 }
 
-// finish flushes whatever is pending; answer is the fallback when nothing was
-// streamed (or the final text when streaming produced no deltas).
+// finish flushes progress, then delivers the final answer as its own
+// Markdown-formatted message (Hermes-style: progress breadcrumbs stay in the
+// working bubble; the answer lands clean below). answer is the model's final
+// text; when streaming produced deltas they already live in l.body.
 func (l *live) finish(answer string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.body == "" && answer != "" {
-		l.body = answer
-		if len(l.body) > maxLiveLen {
-			l.body = l.body[:maxLiveLen]
-		}
+
+	final := answer
+	if final == "" {
+		final = l.body // streamed-only turn: promote the streamed body
 	}
-	if l.msgID == 0 {
-		l.sendLocked(l.render())
+
+	// If there were no tool breadcrumbs, the working bubble IS the answer
+	// bubble — just finalize it in place with Markdown.
+	if len(l.tools) == 0 {
+		l.body = clipLive(final)
+		if l.msgID == 0 {
+			l.sendFinalLocked(l.body)
+		} else {
+			l.editFinalLocked(l.body)
+		}
 		return
 	}
-	l.editLocked(l.render())
+
+	// Tool breadcrumbs exist: collapse them to a compact "done" summary in the
+	// working bubble, then send the answer as a fresh, cleanly-formatted message.
+	summary := fmt.Sprintf("✓ selesai · %d langkah", len(l.tools))
+	if l.msgID != 0 {
+		l.editLocked(summary)
+	}
+	l.body = ""
+	l.msgID = 0
+	l.tools = nil
+	l.sendFinalLocked(clipLive(final))
+}
+
+// clipLive trims a body to Telegram's message limit.
+func clipLive(s string) string {
+	if len(s) > maxLiveLen {
+		return s[:maxLiveLen] + "…"
+	}
+	return s
 }
 
 func (l *live) sendLocked(body string) {
@@ -674,11 +785,41 @@ func (l *live) sendLocked(body string) {
 	l.last = time.Now()
 }
 
+// sendFinalLocked sends a message with Markdown formatting, falling back to
+// plain text if Telegram rejects the markup (unbalanced * or _ in output).
+func (l *live) sendFinalLocked(body string) {
+	if body == "" {
+		return
+	}
+	m := tgbotapi.NewMessage(l.chatID, body)
+	m.ParseMode = tgbotapi.ModeMarkdown
+	if _, err := l.bot.Send(m); err != nil {
+		m.ParseMode = ""
+		l.bot.Send(m)
+	}
+	l.last = time.Now()
+}
+
 func (l *live) editLocked(body string) {
 	if l.msgID == 0 {
 		return
 	}
 	e := tgbotapi.NewEditMessageText(l.chatID, l.msgID, body)
 	l.bot.Send(e)
+	l.last = time.Now()
+}
+
+// editFinalLocked edits the working bubble into the final Markdown answer,
+// falling back to plain text if the markup is rejected.
+func (l *live) editFinalLocked(body string) {
+	if l.msgID == 0 || body == "" {
+		return
+	}
+	e := tgbotapi.NewEditMessageText(l.chatID, l.msgID, body)
+	e.ParseMode = tgbotapi.ModeMarkdown
+	if _, err := l.bot.Send(e); err != nil {
+		e.ParseMode = ""
+		l.bot.Send(e)
+	}
 	l.last = time.Now()
 }
