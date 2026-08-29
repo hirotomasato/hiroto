@@ -1,5 +1,5 @@
-# Hiroto
-hiroto
+# Binary (repo root / cwd). Do not use a bare "hiroto" rule —
+# that also ignores cmd/hiroto/.
 /hiroto
 
 # Go
