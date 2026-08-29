@@ -19,11 +19,11 @@ jobs:
           go-version: "1.23"
 
       - name: Build
-        run: |
-          CGO_ENABLED=0 go build -o hiroto-linux-amd64 ./cmd/hiroto
+        run: CGO_ENABLED=0 go build -o hiroto-linux-amd64 ./cmd/hiroto
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Create Release
+        uses: ncipollo/release-action@v1
         with:
-          files: hiroto-linux-amd64
-          generate_release_notes: true
+          artifacts: hiroto-linux-amd64
+          generateReleaseNotes: true
+          tag: ${{ github.ref_name }}
