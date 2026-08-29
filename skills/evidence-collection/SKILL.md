@@ -21,7 +21,7 @@ For every valid finding, create a self-contained reproduction script under `/wor
 """
 Reproducible PoC for [Vulnerability Title]
 Target: https://target.example.com
-Author: Hermes Security Agent
+Author: Hiroto
 """
 import requests
 

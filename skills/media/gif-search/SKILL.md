@@ -2,7 +2,7 @@
 name: gif-search
 description: "Search/download GIFs from Tenor via curl + jq."
 version: 1.1.0
-author: Hermes Agent
+author: Hiroto Agent
 license: MIT
 platforms: [linux, macos, windows]
 prerequisites:
@@ -23,7 +23,7 @@ Useful for finding reaction GIFs, creating visual content, and sending GIFs in c
 
 ## Setup
 
-Set your Tenor API key in your environment (add to `${HERMES_HOME:-~/.hermes}/.env`):
+Set your Tenor API key in your environment (add to `~/.hiroto/.env`):
 
 ```bash
 TENOR_API_KEY=your_key_here

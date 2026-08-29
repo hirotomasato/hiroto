@@ -35,7 +35,7 @@ User-level (removed manually, no sudo):
 - `~/.cache/@zcodedesktop-updater/` (132M) — contained pending `ZCode-3.8.1-linux-x64.deb` auto-update
 - `~/.local/share/applications/zcode.desktop`
 - `~/Downloads/ZCode-3.7.7-linux-x64.deb` (132M) — original installer
-- `~/.cache/zcode-check/` — NOT created by the app; leftover from Hermes endpoint/quota inspection sessions (check_endpoints*.py scripts + raw API responses incl. `balance_jwt.json` / token material). Not in the app's own footprint, but delete it on any full clean — it contains session token data. Verified present Aug 2026.
+- `~/.cache/zcode-check/` — NOT created by the app; leftover from Hiroto endpoint/quota inspection sessions (check_endpoints*.py scripts + raw API responses incl. `balance_jwt.json` / token material). Not in the app's own footprint, but delete it on any full clean — it contains session token data. Verified present Aug 2026.
 
 ## Clean reinstall session (2026-08-29, second run)
 - Same flow re-verified: pkexec purge zcode 3.10.1-6272 (631 MB freed) → rm user artifacts incl. ~/.cache/zcode-check and /tmp/zcode_home.html (cached homepage HTML from version check) → reinstall same 3.10.1 deb.

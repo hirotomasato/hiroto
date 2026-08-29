@@ -378,7 +378,7 @@ React Native uses platform networking: OkHttp on Android, NSURLSession on iOS.
 |---|---|---|
 | Android | OkHttp3 | Standard OkHttp CertificatePinner hook |
 | iOS | NSURLSession | Standard SecTrust hooks |
-| Android (Hermes) | Same OkHttp | Same hooks, but Hermes JIT may need additional handling |
+| Android (Hiroto) | Same OkHttp | Same hooks, but Hiroto JIT may need additional handling |
 
 ```javascript
 // React Native Android — same as OkHttp bypass
