@@ -114,6 +114,13 @@ install_tool gobuster   github.com/OJ/gobuster/v3 &
 wait
 echo "  Security tools: done"
 
+# Ensure ~/go/bin is in PATH
+if ! echo "$PATH" | grep -q "$HOME/go/bin"; then
+    echo ""
+    echo "  ⚠ Add this to your ~/.bashrc or ~/.zshrc:"
+    echo "    export PATH=\"\$HOME/go/bin:\$PATH\""
+fi
+
 # ---- 5. Done ----
 echo ""
 echo -e "${GREEN}[5/5]${NC} Done!"
@@ -124,8 +131,10 @@ echo "  │                                             │"
 echo "  │  Run: hiroto                                │"
 echo "  │  One-shot: hiroto -q \"your question\"        │"
 echo "  │  Gateway: hiroto gateway                    │"
+echo "  │  Update:  hiroto --update                   │"
 echo "  │                                             │"
 echo "  │  Config: ~/.hiroto/config.yaml              │"
 echo "  │  Skills: ~/.hiroto/skills/                  │"
+echo "  │  Tools:  ~/go/bin/ (10+ security tools)     │"
 echo "  └─────────────────────────────────────────────┘"
 echo ""
