@@ -17,4 +17,4 @@ jobs:
             --title "Hiroto ${{ github.ref_name }}" \
             --generate-notes
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

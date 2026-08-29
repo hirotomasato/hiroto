@@ -1,5 +1,9 @@
 # Hiroto
 
+<p align="center">
+  <img src="assets/hiroto.png" alt="Hiroto" width="400">
+</p>
+
 > Your terminal, your agent. Write code, hunt bugs, automate workflows — all from the command line.
 
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
@@ -88,18 +92,18 @@ Slash commands: `/help /new /resume /compress /update /upgrade /model /memory /t
 
 ## Built-in tools
 
-```
-terminal    read_file    write_file    patch    search_files
-web_search  web_extract  web_fetch
-browser_start  browser_navigate  browser_click  browser_type
-browser_exec   browser_screenshot_cdp  browser_stop
-browser_fetch  browser_screenshot
-execute_code   execute_python
-secret_scan    search_knowledge   aggregate_reports   smart_pipe
-process        delegate_task      cronjob
-memory         todo               skill_view          skill_manage
-session_search  vision_analyze    clarify
-```
+| Category | Tools |
+|----------|-------|
+| Shell | `terminal` `process` `smart_pipe` |
+| Files | `read_file` `write_file` `patch` `search_files` |
+| Web | `web_search` `web_extract` `web_fetch` |
+| Browser | `browser_start` `browser_navigate` `browser_click` `browser_type` `browser_exec` `browser_screenshot_cdp` `browser_stop` `browser_fetch` `browser_screenshot` |
+| Code | `execute_code` (JS) `execute_python` |
+| Security | `secret_scan` `search_knowledge` `aggregate_reports` |
+| Agent | `delegate_task` `cronjob` `clarify` |
+| Memory | `memory` `todo` |
+| Skills | `skill_view` `skill_manage` |
+| Data | `session_search` `vision_analyze` |
 
 ---
 
