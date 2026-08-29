@@ -99,6 +99,8 @@ type model struct {
 
 	history []string // input history
 	histIdx int
+
+	startedAt time.Time // session start (exit summary duration)
 }
 
 func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *session.Store) model {
@@ -116,7 +118,7 @@ func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *se
 	ta.SetHeight(2)
 	ta.Focus()
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle().Foreground(cPrimary)))
-	m := model{cfg: cfg, ag: ag, mem: mem, sessStore: ss, sessID: newSessionID(), input: ta, spinner: sp, histIdx: -1}
+	m := model{cfg: cfg, ag: ag, mem: mem, sessStore: ss, sessID: newSessionID(), input: ta, spinner: sp, histIdx: -1, startedAt: time.Now()}
 	m.vp = viewport.New(80, 20)
 	m.vp.KeyMap = viewport.KeyMap{} // disable default pager keys — we handle scrolling ourselves
 	m.vp.SetContent("")
@@ -251,6 +253,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refresh()
 				return m, nil
 			}
+			collectExitSummary(&m)
 			return m, tea.Quit
 		case tea.KeyCtrlP:
 			m.openModelPicker()
@@ -381,6 +384,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				line{lineInfo, stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /todo /quit")},
 			)
 		case "/quit", "/exit":
+			collectExitSummary(m)
 			return m, tea.Quit
 		case "/new":
 			m.ag.Messages = nil
@@ -623,6 +627,29 @@ func main() {
 		return
 	}
 
+	// continue last session, one-shot: hiroto -c "prompt"
+	if len(os.Args) >= 2 && os.Args[1] == "-c" {
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, `pakai: hiroto -c "prompt" (lanjut sesi terakhir)`)
+			os.Exit(1)
+		}
+		runOneShotContinue(cfg, mem, strings.Join(os.Args[2:], " "))
+		return
+	}
+
+	// resume a saved session in the TUI: hiroto --resume <id>
+	if len(os.Args) >= 2 && os.Args[1] == "--resume" {
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "pakai: hiroto --resume <session-id>")
+			os.Exit(1)
+		}
+		if err := runResumeTUI(cfg, mem, os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "hiroto:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// wire agent: skills + registry + memory + web backends
 	ag := buildAgent(cfg, mem)
 	ss := session.New()
@@ -636,6 +663,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "hiroto:", err)
 		os.Exit(1)
 	}
+	// Altscreen closed — print the resume recap on the normal terminal.
+	printExitSummary()
 }
 
 func workdir() string {

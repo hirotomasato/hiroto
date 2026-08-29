@@ -13,7 +13,10 @@ import (
 
 	"github.com/hirotomasato/hiroto/internal/config"
 	"github.com/hirotomasato/hiroto/internal/llm"
+	"github.com/hirotomasato/hiroto/internal/memory"
 	"github.com/hirotomasato/hiroto/internal/session"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func newSessionID() string {
@@ -159,6 +162,83 @@ func (m *model) openModelPicker() {
 		config.SaveModel(name)
 		mm.lines = append(mm.lines, line{lineInfo, stMuted.Render("model: " + name + " (tersimpan)")})
 	})
+}
+
+// runOneShotContinue runs a one-shot query preloaded with the last saved
+// session (hiroto -c "..."), then saves the extended conversation back.
+func runOneShotContinue(cfg *config.Config, mem *memory.Store, query string) {
+	ss := session.New()
+	list := ss.List()
+	if len(list) == 0 {
+		fmt.Fprintln(os.Stderr, "hiroto: belum ada sesi tersimpan — pakai -q")
+		os.Exit(1)
+	}
+	sess, err := ss.Load(list[0].ID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "hiroto: gagal muat sesi:", err)
+		os.Exit(1)
+	}
+	ag := buildAgent(cfg, mem)
+	ag.Messages = fromStored(sess.Messages)
+	oneShotHeader(cfg, len(ag.Skills))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	answer, err := ag.Run(ctx, query, func(chunk string) {
+		fmt.Print(chunk)
+	})
+	fmt.Println()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "\nhiroto: error:", err)
+		os.Exit(1)
+	}
+	_ = answer
+	sess.Messages = toStored(ag.Messages)
+	sess.Updated = time.Now()
+	sess.Model = ag.Client.Model
+	_ = ss.Save(sess)
+}
+
+// runResumeTUI opens the TUI with a saved session preloaded (hiroto --resume <id>).
+func runResumeTUI(cfg *config.Config, mem *memory.Store, id string) error {
+	ss := session.New()
+	sess, err := ss.Load(id)
+	if err != nil {
+		return fmt.Errorf("sesi %q tidak ditemukan: %w", id, err)
+	}
+	ag := buildAgent(cfg, mem)
+	ag.Messages = fromStored(sess.Messages)
+	if sess.Model != "" {
+		ag.Client.Model = sess.Model
+	}
+
+	// Load the transcript into the scrollback so the chat history is visible.
+	m := initialModel(cfg, ag, mem, ss)
+	m.sessID = sess.ID
+	if sess.Title != "" {
+		m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})
+	}
+	for _, msg := range ag.Messages {
+		switch {
+		case msg.Role == llm.RoleUser:
+			if s, ok := msg.Content.(string); ok {
+				m.lines = append(m.lines, line{lineUser, stUserTag.Render("you ❯") + " " + s})
+			}
+		case msg.Role == llm.RoleAssistant:
+			if s, ok := msg.Content.(string); ok && strings.TrimSpace(s) != "" {
+				m.lines = append(m.lines, line{lineAssistant, stAsstTag.Render("hiroto ◆ ") + s})
+			}
+		}
+	}
+	m.refresh()
+
+	setWindowTitle()
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err = p.Run()
+	if err != nil {
+		return err
+	}
+	printExitSummary()
+	return nil
 }
 
 // runModelsCmd is the standalone `hiroto --models` picker.

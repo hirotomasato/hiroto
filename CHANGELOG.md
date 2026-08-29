@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Exit summary on quit: resume commands (`hiroto --resume <id>`, `hiroto -c "<title>"`), session id, title, duration, message counts
+- `hiroto -c "prompt"` — continue the last saved session, one-shot
+- `hiroto --resume <id>` — reopen a saved session in the TUI with full transcript
+
 ## 0.4.2 — 2026-08-29
 
 - Fix `.gitignore` silently dropping `cmd/hiroto/` — the tagged module now ships the full source and `go install ...@latest` works again

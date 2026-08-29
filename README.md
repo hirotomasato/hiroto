@@ -55,6 +55,8 @@ Config lives in `~/.hiroto/config.yaml`. API key goes in `~/.hiroto/.env`.
 ```bash
 hiroto                  # Interactive TUI
 hiroto -q "who am i?"   # One-shot, prints answer
+hiroto -c "prompt"      # Continue the last session (one-shot)
+hiroto --resume <id>    # Reopen a saved session in the TUI
 hiroto gateway          # Telegram bot
 hiroto --update         # Check for updates
 ```
@@ -72,6 +74,19 @@ In the TUI, everything is keyboard-driven:
 | `PgUp` `PgDn` | Scroll up and down |
 
 Slash commands: `/help /new /resume /compress /update /upgrade /model /memory /todo /quit`
+
+Quitting (`Ctrl+C` or `/quit`) prints a resume recap — session id, title, duration, message counts — so you can pick the conversation back up straight from the shell:
+
+```
+Resume this session with:
+  hiroto --resume 20260829_174120_39daaf
+  hiroto -c "Perbaiki error push dan protect main branch"
+
+Session:        20260829_174120_39daaf
+Title:          Perbaiki error push dan protect main branch
+Duration:       18m 24s
+Messages:       81 (2 user, 77 tool calls)
+```
 
 ---
 
