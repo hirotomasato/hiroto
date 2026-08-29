@@ -324,10 +324,17 @@ func registerWriteFile(r *Registry, opts Options) {
 				_ = os.MkdirAll(dir, 0o755)
 			}
 			autoCheckpoint(opts.Workdir)
+			before := ""
+			if old, err := os.ReadFile(path); err == nil {
+				before = string(old)
+			}
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return Result{Output: err.Error(), IsError: true}
 			}
 			out := fmt.Sprintf("wrote %s (%d bytes)", path, len(content))
+			if d := unifiedDiff(path, before, content); d != "" {
+				out += "\n" + d
+			}
 			if diag := lspCheck(path); diag != "" {
 				out += "\n" + diag
 			}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/aymanbagabas/go-udiff"
 )
 
 func registerPatch(r *Registry, opts Options) {
@@ -38,10 +40,39 @@ func registerPatch(r *Registry, opts Options) {
 			}
 			lines := strings.Count(replaced, "\n") + 1
 			out := fmt.Sprintf("patched %s (%d lines, 1 replacement)", path, lines)
+			if d := unifiedDiff(path, content, replaced); d != "" {
+				out += "\n" + d
+			}
 			if diag := lspCheck(path); diag != "" {
 				out += "\n" + diag
 			}
 			return Result{Output: out}
 		},
 	})
+}
+
+// unifiedDiff returns a compact unified diff (3 lines of context) between two
+// versions of a file, or "" when they're identical. The TUI colorizes the
+// +/- lines; here we only produce the plain diff text.
+func unifiedDiff(path, before, after string) string {
+	if before == after {
+		return ""
+	}
+	d := udiff.Unified(path, path, before, after)
+	// Drop the redundant "--- path\n+++ path" header (the tool line already
+	// names the file); keep the @@ hunks and +/- body.
+	lines := strings.Split(strings.TrimRight(d, "\n"), "\n")
+	var kept []string
+	for _, ln := range lines {
+		if strings.HasPrefix(ln, "--- ") || strings.HasPrefix(ln, "+++ ") {
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	// Cap very large diffs so a huge edit doesn't flood the transcript.
+	const maxDiffLines = 60
+	if len(kept) > maxDiffLines {
+		kept = append(kept[:maxDiffLines], fmt.Sprintf("… (+%d more diff lines)", len(kept)-maxDiffLines))
+	}
+	return strings.Join(kept, "\n")
 }
