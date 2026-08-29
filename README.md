@@ -145,7 +145,7 @@ skills/              240 bundled skills
 
 GitHub already ships a source zip/tarball for every tag. That's enough if you build from source (`go install` / `install.sh`).
 
-The tagged **Release** page also attaches prebuilt binaries (linux/darwin/windows). That's what `hiroto --update` looks at (`/repos/.../releases/latest`). A tag without a Release is invisible to the updater.
+`hiroto --update` looks at `/releases/latest`. A tag without a published Release is invisible to the updater. Install is `go install` / `install.sh`, not a downloaded binary.
 
 Download: https://github.com/hirotomasato/hiroto/releases
 
