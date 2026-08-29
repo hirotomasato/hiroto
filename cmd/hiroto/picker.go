@@ -48,21 +48,102 @@ func newPicker(title string, items, values []string, onPick func(*model, string)
 }
 
 // applyFilter rebuilds the visible items/values from the current filter.
+// Empty query shows everything; otherwise items are fuzzy-matched against the
+// query and ranked so the best hits sort first.
 func (p *pickerState) applyFilter() {
 	q := strings.ToLower(strings.TrimSpace(p.filter))
 	p.items = nil
 	p.values = nil
+
+	type scored struct {
+		i     int
+		score int
+	}
+	var ranked []scored
 	for i, it := range p.allItems {
-		if q == "" || strings.Contains(strings.ToLower(it), q) {
-			p.items = append(p.items, it)
-			p.values = append(p.values, p.allVals[i])
+		if q == "" {
+			ranked = append(ranked, scored{i, 0})
+			continue
+		}
+		if s, ok := fuzzyScore(q, strings.ToLower(it)); ok {
+			ranked = append(ranked, scored{i, s})
 		}
 	}
+	// stable sort by score desc (ties keep original order)
+	for i := 1; i < len(ranked); i++ {
+		for j := i; j > 0 && ranked[j].score > ranked[j-1].score; j-- {
+			ranked[j], ranked[j-1] = ranked[j-1], ranked[j]
+		}
+	}
+	for _, r := range ranked {
+		p.items = append(p.items, p.allItems[r.i])
+		p.values = append(p.values, p.allVals[r.i])
+	}
+
 	if len(p.items) == 0 {
 		p.cursor = -1
 	} else if p.cursor < 0 || p.cursor >= len(p.items) {
 		p.cursor = 0
 	}
+}
+
+// fuzzyScore reports whether q matches text as a fuzzy subsequence and, if so,
+// a relevance score (higher = better). It rewards word-boundary hits, runs of
+// consecutive matches, and matching at the very start — fzf-style.
+func fuzzyScore(q, text string) (int, bool) {
+	if q == "" {
+		return 0, true
+	}
+	qrunes := []rune(q)
+	trunes := []rune(text)
+	qi := 0
+	prev := -1 // rune index of the previous matched rune
+	score := 0
+	runLen := 0
+	totalGap := 0
+
+	for ti, r := range trunes {
+		if qi >= len(qrunes) {
+			break
+		}
+		if r != qrunes[qi] {
+			continue
+		}
+		// word boundary: start, or preceded by a separator
+		if ti == 0 || isSepRune(trunes[ti-1]) {
+			score += 8
+		}
+		if prev >= 0 && ti == prev+1 {
+			// consecutive run
+			runLen++
+			score += 4 + runLen
+		} else {
+			runLen = 1
+			if prev >= 0 {
+				totalGap += ti - prev - 1
+			}
+		}
+		prev = ti
+		qi++
+	}
+	if qi != len(qrunes) {
+		return 0, false
+	}
+	// prefer earlier matches and fewer gaps; small penalty for late start
+	score -= totalGap
+	score -= prev / 3
+	if score < 0 {
+		score = 0
+	}
+	return score, true
+}
+
+func isSepRune(r rune) bool {
+	switch r {
+	case ' ', '-', '_', '.', '/', ':', '(', ')', '[', ']', ',', ';', '|':
+		return true
+	}
+	return false
 }
 
 // updatePicker handles keys while the overlay is open. Returns true if consumed.
