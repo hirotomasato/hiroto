@@ -30,7 +30,6 @@ type pickerState struct {
 	cursor   int
 	filter   string
 	onPick   func(m *model, v string)
-	hover    func(v string) string // optional preview for the highlighted value
 }
 
 func newPicker(title string, items, values []string, onPick func(*model, string)) *pickerState {
@@ -238,17 +237,6 @@ func (m *model) renderPicker() string {
 		}
 	}
 
-	// preview of the highlighted item (e.g. skill description + path)
-	if p.hover != nil && p.cursor >= 0 && p.cursor < len(p.values) {
-		if d := p.hover(p.values[p.cursor]); d != "" {
-			d = strings.TrimSpace(d)
-			if len(d) > 240 {
-				d = d[:240] + "…"
-			}
-			b.WriteString(pkItem.Render("  ─ "+strings.ReplaceAll(d, "\n", "\n    ")) + "\n")
-		}
-	}
-
 	if len(p.items) > win {
 		b.WriteString(pkItem.Render(fmt.Sprintf("  %d/%d", p.cursor+1, len(p.items))) + "\n")
 	}
@@ -279,18 +267,6 @@ func (m *model) openSkillsPicker() {
 			}
 		}
 	})
-	p.hover = func(name string) string {
-		for _, s := range m.ag.Skills {
-			if s.Name == name {
-				d := s.Description
-				if d == "" {
-					d = "(tanpa deskripsi)"
-				}
-				return d + "\n" + s.Path
-			}
-		}
-		return ""
-	}
 	m.picker = p
 	m.refresh()
 }
