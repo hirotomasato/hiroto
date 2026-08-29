@@ -177,7 +177,7 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	answer, err := ag.Run(ctx, text, nil)
+	answer, err := ag.Run(ctx, text, live.text)
 	cancel()
 	ag.Emit = nil
 	st.messages = ag.Messages
@@ -188,9 +188,6 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 	}
 	if answer == "" {
 		answer = "(done)"
-	}
-	if len(answer) > 4000 {
-		answer = answer[:4000] + "\n… (dipotong)"
 	}
 	g.saveChat(st)
 	live.finish(answer)
@@ -428,46 +425,84 @@ func fromStored(st []session.StoredMessage) []llm.Message {
 	return out
 }
 
-// live streams tool activity into one Telegram message, editing it as new
-// lines arrive (throttled to avoid rate limits). finish() replaces it with the
-// final answer.
+// live streams tool activity + assistant text into a single Telegram message,
+// editing it as new content arrives (throttled to avoid rate limits).
+// finish() performs a final flush so the last chunks always land.
 type live struct {
 	bot    *tgbotapi.BotAPI
 	chatID int64
 
-	mu      sync.Mutex
-	lines   []string
-	msgID   int
-	last    time.Time
-	flushed bool // whether lines up to msgID are all on Telegram
+	mu    sync.Mutex
+	tools []string
+	body  string
+	msgID int
+	last  time.Time
 }
+
+const maxLiveLen = 4000 // Telegram message limit; cap the streamed body below it.
 
 func newLive(bot *tgbotapi.BotAPI, chatID int64) *live {
 	return &live{bot: bot, chatID: chatID}
 }
 
+// render builds the current message body from tool lines + streamed text.
+func (l *live) render() string {
+	if len(l.tools) == 0 {
+		return l.body
+	}
+	if l.body == "" {
+		return strings.Join(l.tools, "\n")
+	}
+	return strings.Join(l.tools, "\n") + "\n\n" + l.body
+}
+
+// push adds a fixed tool-activity line (started / finished / error).
 func (l *live) push(line string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.lines = append(l.lines, line)
+	l.tools = append(l.tools, line)
+	l.flushLocked()
+}
+
+// text appends a streamed assistant chunk (capped for Telegram's limit).
+func (l *live) text(chunk string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.body) >= maxLiveLen {
+		return
+	}
+	room := maxLiveLen - len(l.body)
+	if len(chunk) > room {
+		chunk = chunk[:room]
+	}
+	l.body += chunk
+	l.flushLocked()
+}
+
+func (l *live) flushLocked() {
 	if l.msgID == 0 {
-		// first activity: open a live message now
-		l.sendLocked(strings.Join(l.lines, "\n"))
+		l.sendLocked(l.render())
 	} else if time.Since(l.last) > 400*time.Millisecond {
-		l.editLocked(strings.Join(l.lines, "\n"))
+		l.editLocked(l.render())
 	}
 }
 
+// finish flushes whatever is pending; answer is the fallback when nothing was
+// streamed (or the final text when streaming produced no deltas).
 func (l *live) finish(answer string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.body == "" && answer != "" {
+		l.body = answer
+		if len(l.body) > maxLiveLen {
+			l.body = l.body[:maxLiveLen]
+		}
+	}
 	if l.msgID == 0 {
-		// nothing streamed: just send the answer
-		send(l.bot, l.chatID, answer, 0)
+		l.sendLocked(l.render())
 		return
 	}
-	// tool activity happened: append the answer into the live message
-	l.editLocked(strings.Join(append(l.lines, "\n", answer), "\n"))
+	l.editLocked(l.render())
 }
 
 func (l *live) sendLocked(body string) {

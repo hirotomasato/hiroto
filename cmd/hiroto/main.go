@@ -4,6 +4,7 @@ package main
 // streaming assistant text, tool activity lines, spinners, session log.
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -843,13 +844,29 @@ func runToolCmd(name string) {
 
 // runGateway starts the Telegram bot (and future WhatsApp) if configured.
 func runGateway(cfg *config.Config, mem *memory.Store) {
-	if cfg.GatewayToken() == "" {
-		fmt.Fprintln(os.Stderr, "hiroto: gateway.telegram_token tidak diatur di config.yaml")
-		os.Exit(1)
+	token := cfg.GatewayToken()
+	if token == "" {
+		// Setup wizard: prompt for the token, then persist it to ~/.hiroto/.env.
+		fmt.Print("◆ Setup gateway — Token bot Telegram (dari @BotFather): ")
+		scanner := bufio.NewScanner(os.Stdin)
+		if !scanner.Scan() {
+			fmt.Fprintln(os.Stderr, "hiroto: input dibatalkan")
+			os.Exit(1)
+		}
+		token = strings.TrimSpace(scanner.Text())
+		if token == "" {
+			fmt.Fprintln(os.Stderr, "hiroto: token tidak boleh kosong")
+			os.Exit(1)
+		}
+		if err := config.SaveGatewayToken(token); err != nil {
+			fmt.Fprintln(os.Stderr, "hiroto: gagal simpan token:", err)
+			os.Exit(1)
+		}
+		fmt.Println("✓ token tersimpan di ~/.hiroto/.env (HIROTO_TELEGRAM_TOKEN)")
 	}
 	ag := buildAgent(cfg, mem)
 	fmt.Println("◆ Hiroto gateway — Telegram bot berjalan…")
-	log.Fatal(gateway.Telegram(cfg.GatewayToken(), ag))
+	log.Fatal(gateway.Telegram(token, ag))
 }
 
 // llmAdapter bridges tools.LLMClient to the internal LLM client.
