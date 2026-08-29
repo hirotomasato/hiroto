@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const version = "0.4.2"
+const version = "0.6.0"
 const devCredit = "masantoid"
 
 // stChip is the small "HR" logo chip used in the status bar and compact banner.
