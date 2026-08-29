@@ -58,6 +58,9 @@ func (r *Registry) Get(name string) (*Tool, bool) { t, ok := r.tools[name]; retu
 func (r *Registry) Names() []string { return r.order }
 
 // LLMTools renders the registry into OpenAI tool definitions.
+// Every tool gains an optional "activity" string param so the model can narrate
+// each step in plain language (Hermes-style live status). Tools ignore it at
+// Exec time; the UI reads it to label the tool_start/tool_end lines.
 func (r *Registry) LLMTools() []llmTool {
 	out := make([]llmTool, 0, len(r.order))
 	for _, n := range r.order {
@@ -67,11 +70,35 @@ func (r *Registry) LLMTools() []llmTool {
 			Function: llmFn{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  t.Parameters,
+				Parameters:  withActivityParam(t.Parameters),
 			},
 		})
 	}
 	return out
+}
+
+// withActivityParam returns a shallow copy of a tool's JSON-schema parameters
+// with an optional "activity" string property added. The original schema is
+// left untouched (Exec still reads its own keys).
+func withActivityParam(params map[string]any) map[string]any {
+	if params == nil {
+		params = map[string]any{"type": "object"}
+	}
+	cp := make(map[string]any, len(params)+1)
+	for k, v := range params {
+		cp[k] = v
+	}
+	props, _ := cp["properties"].(map[string]any)
+	newProps := make(map[string]any, len(props)+1)
+	for k, v := range props {
+		newProps[k] = v
+	}
+	newProps["activity"] = map[string]any{
+		"type":        "string",
+		"description": "A short present-tense description (3-6 words) of what this call is doing, shown to the user as live status. E.g. 'Reading the config file', 'Running the test suite'.",
+	}
+	cp["properties"] = newProps
+	return cp
 }
 
 // llmTool mirrors llm.Tool without import cycle (structurally identical JSON).

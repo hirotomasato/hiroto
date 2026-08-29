@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hirotomasato/hiroto/internal/llm"
@@ -22,6 +23,7 @@ type Event struct {
 	Type      string // "text", "tool_start", "tool_end", "turn", "error", "done"
 	Text      string
 	ToolName  string
+	ToolArgs  string // raw JSON args (tool_start) — UI renders a short summary
 	Duration  time.Duration
 	Timestamp time.Time
 }
@@ -64,6 +66,8 @@ Before finalizing your response:
 - Use web_search and web_extract for documentation and research.
 - Use browser_navigate/click/type for web automation.
 - Save reusable workflows as skills with skill_manage.
+- Every tool accepts an optional "activity" argument: a short present-tense phrase (3-6 words) describing what THAT specific call is doing, shown live to the user. Always set it. Make it specific to the actual target — "Reading the agent loop", "Running the test suite", "Searching for the banner code" — not generic ("Using a tool").
+- When several tool calls are independent (e.g. reading three different files, or searching while reading), emit them together in a SINGLE response. They run concurrently, so batching is faster than one call per turn. Only serialize when a later call depends on an earlier call's result.
 
 ## Deliverable mode
 
@@ -89,11 +93,11 @@ type Agent struct {
 	CompressKeepTurns int // recent turns to keep intact (default 6)
 	RetryAttempts     int // auto-retry on provider errors (default 2)
 
-	Messages []llm.Message
-	Emit     func(Event) // UI callback
-	SteerCh  chan string // injected mid-turn: read after each tool call
-	Goal     string      // standing goal across turns
-	Reasoning string     // reasoning effort level
+	Messages  []llm.Message
+	Emit      func(Event) // UI callback
+	SteerCh   chan string // injected mid-turn: read after each tool call
+	Goal      string      // standing goal across turns
+	Reasoning string      // reasoning effort level
 }
 
 // SystemPrompt assembles the Hiroto-style system prompt.
@@ -251,38 +255,18 @@ func (a *Agent) Run(ctx context.Context, userText string, onText func(string)) (
 
 		// Preserve assistant message with tool calls, then execute each.
 		a.Messages = append(a.Messages, assistant)
-		for _, tc := range assistant.ToolCalls {
-			// Check for steer injection before each tool.
-			select {
-			case msg := <-a.SteerCh:
-				a.Messages = append(a.Messages, llm.Message{Role: llm.RoleUser, Content: msg})
-				a.emit(Event{Type: "error", Text: "steer: " + msg})
-				// Re-run the LLM with the steer message injected.
-				return a.continueRun(ctx, onText)
-			default:
-			}
 
-			name := tc.Function.Name
-			a.emit(Event{Type: "tool_start", ToolName: name})
-			start := time.Now()
-
-			var result tools.Result
-			tool, ok := a.Reg.Get(name)
-			if !ok {
-				result = tools.Result{Output: fmt.Sprintf("unknown tool %q", name), IsError: true}
-			} else {
-				result = tool.Exec(ctx, tools.JSONArgs(tc.Function.Arguments))
-			}
-			a.emit(Event{Type: "tool_end", ToolName: name, Duration: time.Since(start), Text: result.Output})
-
-			content := result.Output
-			if result.IsError {
-				content = "ERROR: " + content
-			}
-			a.Messages = append(a.Messages, llm.Message{
-				Role: llm.RoleTool, ToolCallID: tc.ID, Name: name, Content: content,
-			})
+		// Check for steer injection before running the batch.
+		select {
+		case msg := <-a.SteerCh:
+			a.Messages = append(a.Messages, llm.Message{Role: llm.RoleUser, Content: msg})
+			a.emit(Event{Type: "error", Text: "steer: " + msg})
+			return a.continueRun(ctx, onText)
+		default:
 		}
+
+		// Run the tool calls (parallel when >1, order-preserving results).
+		a.Messages = append(a.Messages, a.executeToolCalls(ctx, assistant.ToolCalls)...)
 	}
 	// Turn budget exhausted: tell the model to wrap up.
 	wrap := llm.Message{Role: llm.RoleUser, Content: "Turn budget reached. Summarize what was accomplished and what remains, without further tool calls."}
@@ -318,6 +302,58 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// executeToolCalls runs a batch of tool calls and returns their tool-result
+// messages in the SAME order as the calls (required: each result must follow
+// its tool_call_id). A single call runs inline; multiple independent calls run
+// concurrently — mirroring how Hermes fans out independent tool calls in one
+// turn. tool_start/tool_end events are still emitted per call so the UI shows
+// every activity line.
+func (a *Agent) executeToolCalls(ctx context.Context, calls []llm.ToolCall) []llm.Message {
+	out := make([]llm.Message, len(calls))
+	run := func(i int, tc llm.ToolCall) {
+		name := tc.Function.Name
+		a.emit(Event{Type: "tool_start", ToolName: name, ToolArgs: tc.Function.Arguments})
+		start := time.Now()
+
+		var result tools.Result
+		tool, ok := a.Reg.Get(name)
+		if !ok {
+			result = tools.Result{Output: fmt.Sprintf("unknown tool %q", name), IsError: true}
+		} else {
+			result = tool.Exec(ctx, tools.JSONArgs(tc.Function.Arguments))
+		}
+		a.emit(Event{Type: "tool_end", ToolName: name, ToolArgs: tc.Function.Arguments, Duration: time.Since(start), Text: result.Output})
+
+		content := result.Output
+		if result.IsError {
+			content = "ERROR: " + content
+		}
+		out[i] = llm.Message{Role: llm.RoleTool, ToolCallID: tc.ID, Name: name, Content: content}
+	}
+
+	// Single call: run inline (no goroutine overhead, preserves simple path).
+	if len(calls) <= 1 {
+		for i, tc := range calls {
+			run(i, tc)
+		}
+		return out
+	}
+
+	// Multiple calls: run concurrently. a.emit is guarded by the caller's
+	// stream channel (chan send is safe from multiple goroutines) and each
+	// goroutine writes only its own out[i] slot, so no shared-state races.
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(i int, tc llm.ToolCall) {
+			defer wg.Done()
+			run(i, tc)
+		}(i, tc)
+	}
+	wg.Wait()
+	return out
 }
 
 // continueRun continues the agent loop without adding a new user message.
@@ -374,36 +410,17 @@ func (a *Agent) continueRun(ctx context.Context, onText func(string)) (string, e
 		}
 
 		a.Messages = append(a.Messages, assistant)
-		for _, tc := range assistant.ToolCalls {
-			select {
-			case msg := <-a.SteerCh:
-				a.Messages = append(a.Messages, llm.Message{Role: llm.RoleUser, Content: msg})
-				a.emit(Event{Type: "error", Text: "steer: " + msg})
-				return a.continueRun(ctx, onText)
-			default:
-			}
 
-			name := tc.Function.Name
-			a.emit(Event{Type: "tool_start", ToolName: name})
-			start := time.Now()
-
-			var result tools.Result
-			tool, ok := a.Reg.Get(name)
-			if !ok {
-				result = tools.Result{Output: fmt.Sprintf("unknown tool %q", name), IsError: true}
-			} else {
-				result = tool.Exec(ctx, tools.JSONArgs(tc.Function.Arguments))
-			}
-			a.emit(Event{Type: "tool_end", ToolName: name, Duration: time.Since(start), Text: result.Output})
-
-			content := result.Output
-			if result.IsError {
-				content = "ERROR: " + content
-			}
-			a.Messages = append(a.Messages, llm.Message{
-				Role: llm.RoleTool, ToolCallID: tc.ID, Name: name, Content: content,
-			})
+		// Check for steer injection before running the batch.
+		select {
+		case msg := <-a.SteerCh:
+			a.Messages = append(a.Messages, llm.Message{Role: llm.RoleUser, Content: msg})
+			a.emit(Event{Type: "error", Text: "steer: " + msg})
+			return a.continueRun(ctx, onText)
+		default:
 		}
+
+		a.Messages = append(a.Messages, a.executeToolCalls(ctx, assistant.ToolCalls)...)
 	}
 	wrap := llm.Message{Role: llm.RoleUser, Content: "Turn budget reached. Summarize what was accomplished and what remains, without further tool calls."}
 	a.Messages = append(a.Messages, wrap)
