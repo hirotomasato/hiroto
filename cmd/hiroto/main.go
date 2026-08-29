@@ -459,8 +459,8 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 
 	m.history = append(m.history, text)
 	m.histIdx = -1
-	m.lines = append(m.lines, line{lineUser, stUserTag.Render("you ❯") + " " + text})
-	m.lines = append(m.lines, line{lineAssistant, stAsstTag.Render("hiroto ◆ ")})
+	m.lines = append(m.lines, line{lineUser, text})
+	m.lines = append(m.lines, line{lineAssistant, ""})
 	m.input.Reset()
 	m.busy = true
 	m.refresh()
@@ -490,11 +490,22 @@ func (m *model) refresh() {
 	var b strings.Builder
 	for _, ln := range m.lines {
 		text := ln.text
-		// Render markdown for assistant messages
-		if ln.kind == lineAssistant && text != "" {
+		switch ln.kind {
+		case lineUser:
+			if text != "" {
+				text = stUserTag.Render("you ❯") + " " + text
+			}
+		case lineAssistant:
+			if strings.TrimSpace(text) == "" {
+				continue // streaming placeholder — nothing to show yet
+			}
+			// Render markdown on the RAW body only: never feed styled text
+			// (embedded ANSI) through glamour — its writer can split escape
+			// sequences and leak fragments like [1;38;2;…m as literal text.
 			if rendered, err := mdRenderer().Render(text); err == nil {
 				text = rendered
 			}
+			text = stAsstTag.Render("hiroto ◆ ") + text
 		}
 		b.WriteString(text + "\n")
 	}

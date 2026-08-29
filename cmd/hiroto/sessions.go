@@ -221,11 +221,11 @@ func runResumeTUI(cfg *config.Config, mem *memory.Store, id string) error {
 		switch {
 		case msg.Role == llm.RoleUser:
 			if s, ok := msg.Content.(string); ok {
-				m.lines = append(m.lines, line{lineUser, stUserTag.Render("you ❯") + " " + s})
+				m.lines = append(m.lines, line{lineUser, s})
 			}
 		case msg.Role == llm.RoleAssistant:
 			if s, ok := msg.Content.(string); ok && strings.TrimSpace(s) != "" {
-				m.lines = append(m.lines, line{lineAssistant, stAsstTag.Render("hiroto ◆ ") + s})
+				m.lines = append(m.lines, line{lineAssistant, s})
 			}
 		}
 	}
