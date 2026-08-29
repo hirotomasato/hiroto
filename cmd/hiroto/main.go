@@ -1498,7 +1498,16 @@ func runGateway(cfg *config.Config, mem *memory.Store) {
 	}
 	ag := buildAgent(cfg, mem)
 	fmt.Println("◆ Hiroto gateway — Telegram bot berjalan…")
-	log.Fatal(gateway.Telegram(token, ag))
+	typing := true
+	if cfg.Gateway.TypingIndicator != nil {
+		typing = *cfg.Gateway.TypingIndicator
+	}
+	opts := gateway.Options{
+		ToolProgress:    cfg.Gateway.ToolProgress,
+		CleanupProgress: cfg.Gateway.CleanupProgress,
+		TypingIndicator: typing,
+	}
+	log.Fatal(gateway.Telegram(token, ag, opts))
 }
 
 // runAPI starts the OpenAI-compatible API server.

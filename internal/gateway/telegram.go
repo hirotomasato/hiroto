@@ -37,6 +37,26 @@ func sessionIDFor(chatID int64) string {
 	return fmt.Sprintf("tg%d", chatID)
 }
 
+// Options tunes gateway presentation (Hermes-style progress controls).
+type Options struct {
+	// ToolProgress: "all" (default) | "new" | "off".
+	ToolProgress string
+	// CleanupProgress deletes the progress bubble after the final answer lands
+	// (successful turns only).
+	CleanupProgress bool
+	// TypingIndicator shows the "typing…" chat action while working.
+	TypingIndicator bool
+}
+
+func (o Options) progressMode() string {
+	switch o.ToolProgress {
+	case "new", "off":
+		return o.ToolProgress
+	default:
+		return "all"
+	}
+}
+
 // gw holds the bot runtime state shared across all chats.
 type gw struct {
 	bot     *tgbotapi.BotAPI
@@ -46,6 +66,7 @@ type gw struct {
 	chats   map[int64]*chat
 	cancels map[int64]context.CancelFunc // per-chat cancel for /stop
 	cancMu  sync.Mutex
+	opts    Options
 }
 
 // registerCommandMenu populates Telegram's "/" command picker (Hermes-style)
@@ -71,7 +92,7 @@ func registerCommandMenu(bot *tgbotapi.BotAPI) {
 }
 
 // Telegram starts a polling bot that forwards messages to the agent.
-func Telegram(token string, ag *agent.Agent) error {
+func Telegram(token string, ag *agent.Agent, opts Options) error {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return fmt.Errorf("telegram: %w", err)
@@ -94,6 +115,7 @@ func Telegram(token string, ag *agent.Agent) error {
 		sess:    session.New(),
 		chats:   make(map[int64]*chat),
 		cancels: make(map[int64]context.CancelFunc),
+		opts:    opts,
 	}
 
 	u := tgbotapi.NewUpdate(0)
@@ -530,18 +552,28 @@ func (g *gw) handleSessions(chatID int64, arg string, replyTo int) {
 // It is shared between handle (free-form messages) and handleRetry.
 func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	log.Printf("[gateway] %s", text)
-	typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
-	g.bot.Send(typing)
+	if g.opts.TypingIndicator {
+		typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
+		g.bot.Send(typing)
+	}
 
 	ag := g.ag
 	ag.Messages = st.messages
 
 	live := newLive(g.bot, chatID)
+	live.cleanup = g.opts.CleanupProgress
+	progress := g.opts.progressMode()
 	ag.Emit = func(e agent.Event) {
+		if progress == "off" {
+			return
+		}
 		switch e.Type {
 		case "tool_start":
 			live.push("▸ " + agent.ActivityLabel(e.ToolName, e.ToolArgs) + " …")
 		case "tool_end":
+			if progress == "new" {
+				return // "new" shows only start lines
+			}
 			live.push("  ✓ " + agent.ActivityLabel(e.ToolName, e.ToolArgs) + " (" + e.Duration.Round(100*time.Millisecond).String() + ")")
 		case "compress_start", "compress_end":
 			live.push("⚡ " + e.Text)
@@ -677,11 +709,12 @@ type live struct {
 	bot    *tgbotapi.BotAPI
 	chatID int64
 
-	mu    sync.Mutex
-	tools []string
-	body  string
-	msgID int
-	last  time.Time
+	mu      sync.Mutex
+	tools   []string
+	body    string
+	msgID   int
+	last    time.Time
+	cleanup bool // delete the progress bubble after a successful final answer
 }
 
 const maxLiveLen = 4000 // Telegram message limit; cap the streamed body below it.
@@ -757,10 +790,12 @@ func (l *live) finish(answer string) {
 		return
 	}
 
-	// Tool breadcrumbs exist: collapse them to a compact "done" summary in the
-	// working bubble, then send the answer as a fresh, cleanly-formatted message.
-	summary := fmt.Sprintf("✓ selesai · %d langkah", len(l.tools))
-	if l.msgID != 0 {
+	// Tool breadcrumbs exist. Either delete the progress bubble (cleanup) or
+	// collapse it to a compact "done" summary, then send the answer fresh.
+	if l.cleanup && l.msgID != 0 {
+		l.deleteLocked()
+	} else if l.msgID != 0 {
+		summary := fmt.Sprintf("✓ selesai · %d langkah", len(l.tools))
 		l.editLocked(summary)
 	}
 	l.body = ""
@@ -807,6 +842,14 @@ func (l *live) editLocked(body string) {
 	e := tgbotapi.NewEditMessageText(l.chatID, l.msgID, body)
 	l.bot.Send(e)
 	l.last = time.Now()
+}
+
+// deleteLocked removes the progress bubble (cleanup mode). Best-effort.
+func (l *live) deleteLocked() {
+	if l.msgID == 0 {
+		return
+	}
+	l.bot.Request(tgbotapi.NewDeleteMessage(l.chatID, l.msgID))
 }
 
 // editFinalLocked edits the working bubble into the final Markdown answer,

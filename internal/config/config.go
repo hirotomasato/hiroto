@@ -14,7 +14,7 @@ type Config struct {
 	Model struct {
 		BaseURL   string   `yaml:"base_url"`
 		Name      string   `yaml:"model"`
-		APIKeyEnv string   `yaml:"api_key"` // literal key or ${ENV_NAME}
+		APIKeyEnv string   `yaml:"api_key"`   // literal key or ${ENV_NAME}
 		Available []string `yaml:"available"` // cached model list from /v1/models
 	} `yaml:"model"`
 	Agent struct {
@@ -29,6 +29,17 @@ type Config struct {
 	} `yaml:"skills"`
 	Gateway struct {
 		TelegramToken string `yaml:"telegram_token"` // Bot API token (empty = off)
+		// ToolProgress controls how much tool activity is streamed to chat:
+		//   "all" (default) — every tool start/end as a breadcrumb line
+		//   "new"           — only tool_start lines (quieter)
+		//   "off"           — no breadcrumbs; only the final answer
+		ToolProgress string `yaml:"tool_progress"`
+		// CleanupProgress deletes the progress bubble once the final answer
+		// lands (Hermes-style). Failed turns keep the bubble as a breadcrumb.
+		CleanupProgress bool `yaml:"cleanup_progress"`
+		// TypingIndicator shows the "typing…" action while the agent works.
+		// Defaults to true when unset.
+		TypingIndicator *bool `yaml:"typing_indicator"`
 	} `yaml:"gateway"`
 	API struct {
 		Port int `yaml:"port"` // API server port (default 20129)
