@@ -1506,6 +1506,7 @@ func runGateway(cfg *config.Config, mem *memory.Store) {
 		ToolProgress:    cfg.Gateway.ToolProgress,
 		CleanupProgress: cfg.Gateway.CleanupProgress,
 		TypingIndicator: typing,
+		AllowedUsers:    cfg.AllowedUsers(),
 	}
 	log.Fatal(gateway.Telegram(token, ag, opts))
 }

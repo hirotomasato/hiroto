@@ -46,6 +46,9 @@ type Options struct {
 	CleanupProgress bool
 	// TypingIndicator shows the "typing…" chat action while working.
 	TypingIndicator bool
+	// AllowedUsers is the set of Telegram user IDs permitted to use the bot.
+	// Empty = deny everyone (safe default for a terminal-capable bot).
+	AllowedUsers []int64
 }
 
 func (o Options) progressMode() string {
@@ -67,6 +70,13 @@ type gw struct {
 	cancels map[int64]context.CancelFunc // per-chat cancel for /stop
 	cancMu  sync.Mutex
 	opts    Options
+	allowed map[int64]bool // Telegram user IDs permitted to use the bot
+}
+
+// isAllowed reports whether a Telegram user may use the bot. An empty allowlist
+// denies everyone (safe default for a bot with terminal access).
+func (g *gw) isAllowed(userID int64) bool {
+	return g.allowed[userID]
 }
 
 // registerCommandMenu populates Telegram's "/" command picker (Hermes-style)
@@ -116,6 +126,15 @@ func Telegram(token string, ag *agent.Agent, opts Options) error {
 		chats:   make(map[int64]*chat),
 		cancels: make(map[int64]context.CancelFunc),
 		opts:    opts,
+		allowed: make(map[int64]bool),
+	}
+	for _, id := range opts.AllowedUsers {
+		g.allowed[id] = true
+	}
+	if len(g.allowed) == 0 {
+		log.Printf("[gateway] ⚠ allowlist KOSONG — semua user ditolak. Set gateway.allowed_users di config.yaml atau HIROTO_TELEGRAM_ALLOWED_USERS di .env")
+	} else {
+		log.Printf("[gateway] allowlist: %d user diizinkan", len(g.allowed))
 	}
 
 	u := tgbotapi.NewUpdate(0)
@@ -134,6 +153,20 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 	text := strings.TrimSpace(msg.Text)
 	replyTo := msg.MessageID
+
+	// Access control: only allowlisted Telegram user IDs may use the bot.
+	// This bot has full terminal access, so an empty allowlist denies all.
+	var userID int64
+	if msg.From != nil {
+		userID = msg.From.ID
+	}
+	if !g.isAllowed(userID) {
+		log.Printf("[gateway] tolak user %d (chat %d)", userID, chatID)
+		send(g.bot, chatID, fmt.Sprintf(
+			"⛔ Akses ditolak.\n\nID Telegram lo: %d\n\nMinta owner nambahin ID ini ke gateway.allowed_users (config.yaml) atau HIROTO_TELEGRAM_ALLOWED_USERS (.env), lalu restart gateway.",
+			userID), replyTo)
+		return
+	}
 
 	fields := strings.Fields(text)
 	cmd := ""
