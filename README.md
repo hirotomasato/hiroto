@@ -6,7 +6,7 @@
 
 > Your terminal, your agent. Write code, hunt bugs, automate workflows — all from the command line.
 
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev)
 [![Version](https://img.shields.io/github/v/release/hirotomasato/hiroto?color=blue)](https://github.com/hirotomasato/hiroto/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hirotomasato/hiroto/ci.yml?branch=main)](https://github.com/hirotomasato/hiroto/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -29,7 +29,7 @@ One command:
 curl -fsSL https://raw.githubusercontent.com/hirotomasato/hiroto/main/install.sh | bash
 ```
 
-That installs Hiroto, 10+ security tools, and 240 skills automatically. You need Go 1.23+, Node.js, Python 3, and Chrome.
+That installs Hiroto, 10+ security tools, and 240 skills automatically. You need Go 1.26+, Node.js, Python 3, and Chrome.
 
 Windows:
 
@@ -138,6 +138,16 @@ internal/
   gateway/           Telegram bot
 skills/              240 bundled skills
 ```
+
+---
+
+## Releases
+
+GitHub already ships a source zip/tarball for every tag. That's enough if you build from source (`go install` / `install.sh`).
+
+The tagged **Release** page also attaches prebuilt binaries (linux/darwin/windows). That's what `hiroto --update` looks at (`/repos/.../releases/latest`). A tag without a Release is invisible to the updater.
+
+Download: https://github.com/hirotomasato/hiroto/releases
 
 ---
 

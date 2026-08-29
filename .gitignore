@@ -27,8 +27,8 @@ Thumbs.db
 .env
 *.env.local
 
-# Build
+# Build artifacts (never commit binaries)
 /tmp
-/logshiroto-linux-amd64
+/dist/
 /hiroto-linux-amd64
-hiroto.png
+/hiroto.png

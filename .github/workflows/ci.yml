@@ -15,13 +15,20 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Build
+        env:
+          GOTOOLCHAIN: auto
         run: go build ./...
 
       - name: Vet
+        env:
+          GOTOOLCHAIN: auto
         run: go vet ./...
 
       - name: Test
+        env:
+          GOTOOLCHAIN: auto
         run: go test ./...
