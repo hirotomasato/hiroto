@@ -1,7 +1,9 @@
 package main
 
-// picker: reusable arrow-key list selection (model picker, session picker).
-// Works as an in-TUI overlay and as a standalone mini-program for CLI flags.
+// picker: reusable arrow-key list selection (model picker, session picker,
+// skills picker). Works as an in-TUI overlay and as a standalone mini-program
+// for CLI flags. Supports type-to-search filtering and an optional preview
+// line for the highlighted item.
 
 import (
 	"fmt"
@@ -20,18 +22,47 @@ var (
 
 // pickerState is the in-TUI overlay state.
 type pickerState struct {
-	title  string
-	items  []string // display lines
-	values []string // picked values (defaults to items)
-	cursor int
-	onPick func(m *model, v string)
+	title    string
+	allItems []string // full list, unfiltered
+	allVals  []string // picked values, parallel to allItems
+	items    []string // filtered display lines
+	values   []string // filtered values
+	cursor   int
+	filter   string
+	onPick   func(m *model, v string)
+	hover    func(v string) string // optional preview for the highlighted value
 }
 
 func newPicker(title string, items, values []string, onPick func(*model, string)) *pickerState {
 	if values == nil {
 		values = items
 	}
-	return &pickerState{title: title, items: items, values: values, onPick: onPick}
+	p := &pickerState{
+		title:    title,
+		allItems: append([]string(nil), items...),
+		allVals:  append([]string(nil), values...),
+		onPick:   onPick,
+	}
+	p.applyFilter()
+	return p
+}
+
+// applyFilter rebuilds the visible items/values from the current filter.
+func (p *pickerState) applyFilter() {
+	q := strings.ToLower(strings.TrimSpace(p.filter))
+	p.items = nil
+	p.values = nil
+	for i, it := range p.allItems {
+		if q == "" || strings.Contains(strings.ToLower(it), q) {
+			p.items = append(p.items, it)
+			p.values = append(p.values, p.allVals[i])
+		}
+	}
+	if len(p.items) == 0 {
+		p.cursor = -1
+	} else if p.cursor < 0 || p.cursor >= len(p.items) {
+		p.cursor = 0
+	}
 }
 
 // updatePicker handles keys while the overlay is open. Returns true if consumed.
@@ -50,21 +81,37 @@ func (m *model) updatePicker(msg tea.KeyMsg) bool {
 			p.cursor++
 		}
 	case "home", "g":
-		p.cursor = 0
-	case "end", "G":
-		p.cursor = len(p.items) - 1
-	case "enter":
-		v := p.values[p.cursor]
-		fn := p.onPick
-		m.picker = nil
-		if fn != nil {
-			fn(m, v)
+		if len(p.items) > 0 {
+			p.cursor = 0
 		}
-		m.refresh()
+	case "end", "G":
+		if len(p.items) > 0 {
+			p.cursor = len(p.items) - 1
+		}
+	case "backspace":
+		if p.filter != "" {
+			p.filter = p.filter[:len(p.filter)-1]
+			p.applyFilter()
+		}
+	case "enter":
+		if p.cursor >= 0 && p.cursor < len(p.values) {
+			v := p.values[p.cursor]
+			fn := p.onPick
+			m.picker = nil
+			if fn != nil {
+				fn(m, v)
+			}
+			m.refresh()
+		}
 	case "esc", "q":
 		m.picker = nil
 		m.refresh()
 	default:
+		// type-to-search: append printable runes to the filter
+		if rs := msg.Runes; len(rs) == 1 && rs[0] >= 0x20 && rs[0] != 0x7f {
+			p.filter += string(rs[0])
+			p.applyFilter()
+		}
 		return true // swallow other keys while picking
 	}
 	return true
@@ -77,31 +124,98 @@ func (m *model) renderPicker() string {
 		return ""
 	}
 	const win = 12
-	start, end := 0, len(p.items)
-	if end > win {
-		start = p.cursor - win/2
-		if start < 0 {
-			start = 0
-		}
-		if start+win > end {
-			start = end - win
-		}
-		end = start + win
-	}
 	var b strings.Builder
-	b.WriteString(pkTitle.Render(p.title) + "\n")
-	for i := start; i < end; i++ {
-		marker, style := "  ", pkItem
-		if i == p.cursor {
-			marker, style = "❯ ", pkCur
-		}
-		b.WriteString(style.Render(marker+p.items[i]) + "\n")
+	title := p.title
+	if p.filter != "" {
+		title += "  (cari: " + p.filter + ")"
 	}
-	if len(p.items) > 12 {
+	b.WriteString(pkTitle.Render(title) + "\n")
+
+	if len(p.items) == 0 {
+		b.WriteString(pkItem.Render("  (tidak ada hasil)") + "\n")
+	} else {
+		start, end := 0, len(p.items)
+		if end > win {
+			start = p.cursor - win/2
+			if start < 0 {
+				start = 0
+			}
+			if start+win > end {
+				start = end - win
+			}
+			end = start + win
+		}
+		for i := start; i < end; i++ {
+			marker, style := "  ", pkItem
+			if i == p.cursor {
+				marker, style = "❯ ", pkCur
+			}
+			b.WriteString(style.Render(marker+p.items[i]) + "\n")
+		}
+	}
+
+	// preview of the highlighted item (e.g. skill description + path)
+	if p.hover != nil && p.cursor >= 0 && p.cursor < len(p.values) {
+		if d := p.hover(p.values[p.cursor]); d != "" {
+			d = strings.TrimSpace(d)
+			if len(d) > 240 {
+				d = d[:240] + "…"
+			}
+			b.WriteString(pkItem.Render("  ─ "+strings.ReplaceAll(d, "\n", "\n    ")) + "\n")
+		}
+	}
+
+	if len(p.items) > win {
 		b.WriteString(pkItem.Render(fmt.Sprintf("  %d/%d", p.cursor+1, len(p.items))) + "\n")
 	}
-	b.WriteString(pkItem.Render("↑↓ pilih · Enter ok · esc batal"))
+	b.WriteString(pkItem.Render("↑↓ pilih · ketik untuk cari · Enter ok · esc batal"))
 	return pkBox.Render(strings.TrimRight(b.String(), "\n"))
+}
+
+// openSkillsPicker lists indexed skills; picking shows name + description.
+// Hover shows the full description and SKILL.md path.
+func (m *model) openSkillsPicker() {
+	n := len(m.ag.Skills)
+	if n == 0 {
+		m.lines = append(m.lines, line{lineInfo, stMuted.Render("tidak ada skill terindex")})
+		m.refresh()
+		return
+	}
+	display := make([]string, n)
+	values := make([]string, n)
+	for i, s := range m.ag.Skills {
+		values[i] = s.Name
+		d := s.Description
+		if d == "" {
+			d = "(tanpa deskripsi)"
+		}
+		if len(d) > 80 {
+			d = d[:80] + "…"
+		}
+		display[i] = fmt.Sprintf("%s  ·  %s", s.Name, d)
+	}
+	p := newPicker(fmt.Sprintf("pilih skill (%d)", n), display, values, func(mm *model, name string) {
+		for _, s := range mm.ag.Skills {
+			if s.Name == name {
+				mm.lines = append(mm.lines, line{lineInfo, stMuted.Render("skill: " + s.Name + " — " + s.Description)})
+				break
+			}
+		}
+	})
+	p.hover = func(name string) string {
+		for _, s := range m.ag.Skills {
+			if s.Name == name {
+				d := s.Description
+				if d == "" {
+					d = "(tanpa deskripsi)"
+				}
+				return d + "\n" + s.Path
+			}
+		}
+		return ""
+	}
+	m.picker = p
+	m.refresh()
 }
 
 // ---------- standalone picker (CLI flags) ----------

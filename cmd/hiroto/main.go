@@ -417,18 +417,22 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			}()
 			return m, nil
 		case "/skills":
-			var names []string
-			for _, s := range m.ag.Skills {
-				names = append(names, s.Name)
+			if len(fields) >= 2 {
+				m.openSkillsPicker()
+				if m.picker != nil {
+					m.picker.filter = strings.Join(fields[1:], " ")
+					m.picker.applyFilter()
+				}
+			} else {
+				m.openSkillsPicker()
 			}
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("skills: " + strings.Join(names, ", "))})
 		case "/model":
 			if len(fields) >= 2 {
 				m.cfg.Model.Name = fields[1]
 				m.ag.Client.Model = fields[1]
 				m.lines = append(m.lines, line{lineInfo, stMuted.Render("model sesi ini: " + fields[1] + " (permanen: edit model: di ~/.hiroto/config.yaml)")})
 			} else {
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("model aktif: " + m.ag.Client.Model + " · pakai: /model <nama>")})
+				m.openModelPicker()
 			}
 		case "/memory":
 			if len(fields) >= 2 && fields[1] == "add" {
