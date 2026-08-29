@@ -21,9 +21,10 @@ jobs:
       - name: Build
         run: CGO_ENABLED=0 go build -o hiroto-linux-amd64 ./cmd/hiroto
 
-      - name: Create Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: hiroto-linux-amd64
-          generateReleaseNotes: true
-          tag: ${{ github.ref_name }}
+      - name: Upload Release
+        run: |
+          gh release create "${{ github.ref_name }}" hiroto-linux-amd64 \
+            --title "Hiroto ${{ github.ref_name }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
