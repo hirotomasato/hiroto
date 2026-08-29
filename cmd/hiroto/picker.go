@@ -269,14 +269,7 @@ func (m *model) openSkillsPicker() {
 	values := make([]string, n)
 	for i, s := range m.ag.Skills {
 		values[i] = s.Name
-		d := s.Description
-		if d == "" {
-			d = "(tanpa deskripsi)"
-		}
-		if len(d) > 80 {
-			d = d[:80] + "…"
-		}
-		display[i] = fmt.Sprintf("%s  ·  %s", s.Name, d)
+		display[i] = s.Name
 	}
 	p := newPicker(fmt.Sprintf("pilih skill (%d)", n), display, values, func(mm *model, name string) {
 		for _, s := range mm.ag.Skills {
