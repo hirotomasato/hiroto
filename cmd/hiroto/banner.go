@@ -21,9 +21,9 @@ var stChip = lipgloss.NewStyle().
 	Background(lipgloss.Color("#E8A33D")).
 	Padding(0, 1)
 
-// Tagline / rule — a step brighter than stMuted so the banner matches assets/hiroto.svg.
+// Tagline / rule — warm gold so the banner matches assets/hiroto.svg.
 var (
-	stTagline = lipgloss.NewStyle().Foreground(lipgloss.Color("#C4B49A"))
+	stTagline = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2C14E"))
 	stRule    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E8A33D"))
 )
 
@@ -87,32 +87,59 @@ func gradient(lines []string) []string {
 	return out
 }
 
+// rules renders a gold horizontal rule of the given width.
+func rules(width int) string {
+	if width > 56 {
+		width = 56
+	}
+	if width < 24 {
+		width = 24
+	}
+	return stRule.Render(strings.Repeat("─", width))
+}
+
+// centerPad centers a rendered string into a fixed width via leading spaces.
+func centerPad(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return s
+	}
+	return strings.Repeat(" ", (width-w)/2) + s
+}
+
 // bannerLines returns the full startup banner (big word + tagline + credits).
 // Falls back to a compact one-liner on narrow terminals.
 func bannerLines(width int, modelInfo string, skillCount int) []string {
-	ruleW := width
-	if ruleW > 56 {
-		ruleW = 56
-	}
-	if ruleW < 24 {
-		ruleW = 24
-	}
-	rule := stRule.Render(strings.Repeat("─", ruleW))
+	rule := rules(width)
 
 	var out []string
 	out = append(out, rule) // top rule, mirrors the bottom one
+
+	bannerW := ruleWidth(width)
 	if width >= 60 {
 		out = append(out, gradient(bannerRows("HIROTO"))...)
 	} else {
 		out = append(out, stChip.Render("HR")+" "+stBanner.Render("HIROTO"))
+		if bannerW < 24 {
+			bannerW = 24
+		}
 	}
 	out = append(out,
-		stTagline.Render("personal agent · go core · cyberteam"),
+		centerPad(stTagline.Render("personal agent · go core · cyberteam"), bannerW),
 		rule,
-		stMuted.Render("v"+version+" · "+devCredit+" · "+modelInfo+fmt.Sprintf(" · skills: %d", skillCount)),
 		"",
 	)
 	return out
+}
+
+func ruleWidth(width int) int {
+	if width > 56 {
+		return 56
+	}
+	if width < 24 {
+		return 24
+	}
+	return width
 }
 
 // setWindowTitle names the terminal tab "HR · hiroto" (OSC 9;22 with an

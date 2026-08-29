@@ -769,8 +769,7 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 			Command: srv.Command, Args: srv.Args,
 		})
 		if err != nil {
-			log.Printf("[mcp] %s: %v", srv.Command, err)
-			continue
+			continue // non-fatal: a failed MCP server must not pollute the TUI
 		}
 		for _, mt := range mcp.Tools() {
 			reg.Register(&tools.Tool{
