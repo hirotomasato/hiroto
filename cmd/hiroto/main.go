@@ -55,6 +55,10 @@ var (
 	stErr     = lipgloss.NewStyle().Foreground(cErr)
 	stInput   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBgFaint).Padding(0, 1)
 	stHelp    = lipgloss.NewStyle().Foreground(cMuted)
+
+	// Flash card (floating error/info popup — Hermes-style).
+	stFlashErr  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cErr).Padding(0, 1).Foreground(cErr)
+	stFlashInfo = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cPrimary).Padding(0, 1).Foreground(cPrimary)
 )
 
 // ---------- model ----------
@@ -111,6 +115,15 @@ type model struct {
 	steerCh   chan string
 	goal      string // standing goal across turns
 	reasoning string // reasoning effort level
+	flash     string // temporary flash message (error/warning card)
+	flashKind string // "error" or "info"
+
+	// Command picker (slash suggestions).
+	cmdPicker struct {
+		active  bool
+		items   []string
+		cursor  int
+	}
 }
 
 func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *session.Store) model {
@@ -268,6 +281,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refresh()
 
 	case tea.KeyMsg:
+		// Command picker intercepts keys first.
+		if m.cmdPicker.active {
+			switch msg.String() {
+			case "up", "k":
+				if m.cmdPicker.cursor > 0 {
+					m.cmdPicker.cursor--
+				}
+				return m, nil
+			case "down", "j":
+				if m.cmdPicker.cursor < len(m.cmdPicker.items)-1 {
+					m.cmdPicker.cursor++
+				}
+				return m, nil
+			case "enter":
+				if m.cmdPicker.cursor >= 0 && m.cmdPicker.cursor < len(m.cmdPicker.items) {
+					m.input.SetValue(m.cmdPicker.items[m.cmdPicker.cursor] + " ")
+				}
+				m.cmdPicker.active = false
+				return m, nil
+			case "esc":
+				m.cmdPicker.active = false
+				return m, nil
+			default:
+				// Any other key closes the picker and passes through.
+				m.cmdPicker.active = false
+			}
+		}
+
 		// picker overlay consumes keys first
 		if m.picker != nil {
 			if m.updatePicker(msg) {
@@ -320,6 +361,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" || m.busy {
 				return m, nil
 			}
+			m.clearFlash()
 			return m.handleSubmit(text)
 		case tea.KeyUp:
 			if len(m.history) > 0 && m.histIdx < len(m.history)-1 {
@@ -509,17 +551,17 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("mematikan %d proses background", n))})
 		case "/steer":
 			if len(fields) < 2 {
-				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /steer <pesan>")})
+				m.flashMsg("pakai: /steer <pesan>", "error")
 			} else if m.busy && m.steerCh != nil {
 				msg := strings.Join(fields[1:], " ")
 				select {
 				case m.steerCh <- msg:
 					m.lines = append(m.lines, line{lineInfo, stMuted.Render("steer: " + msg)})
 				default:
-					m.lines = append(m.lines, line{lineError, stErr.Render("steer: channel penuh, coba lagi")})
+					m.flashMsg("steer: channel penuh, coba lagi", "error")
 				}
 			} else {
-				m.lines = append(m.lines, line{lineError, stErr.Render("agent sedang tidak sibuk")})
+				m.flashMsg("agent sedang tidak sibuk", "info")
 			}
 		case "/verbose":
 			m.verbose = (m.verbose + 1) % 3
@@ -543,7 +585,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
-				m.lines = append(m.lines, line{lineError, stErr.Render("editor: " + err.Error())})
+				m.flashMsg("editor: " + err.Error(), "error")
 			} else {
 				data, _ := os.ReadFile(tmp.Name())
 				text := strings.TrimSpace(string(data))
@@ -554,7 +596,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			}
 		case "/bg":
 			if len(fields) < 2 {
-				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /bg <prompt>")})
+				m.flashMsg("pakai: /bg <prompt>", "error")
 			} else {
 				bgText := strings.Join(fields[1:], " ")
 				m.lines = append(m.lines, line{lineInfo, stMuted.Render("background: " + truncateStr(bgText, 80))})
@@ -597,14 +639,14 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				}
 			}
 			if last == "" {
-				m.lines = append(m.lines, line{lineError, stErr.Render("tidak ada response untuk disalin")})
+				m.flashMsg("tidak ada response untuk disalin", "error")
 			} else {
 				copyToClipboard(last)
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("disalin ke clipboard")})
+				m.flashMsg("disalin ke clipboard", "info")
 			}
 		case "/title":
 			if len(fields) < 2 {
-				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /title <judul>")})
+				m.flashMsg("pakai: /title <judul>", "error")
 			} else {
 				m.sessID = strings.Join(fields[1:], " ")
 				m.saveSession()
@@ -616,12 +658,12 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("reload: %d skill", len(m.ag.Skills)))})
 		case "/image":
 			if len(fields) < 2 {
-				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /image <path>")})
+				m.flashMsg("pakai: /image <path>", "error")
 			} else {
 				imgPath := strings.Join(fields[1:], " ")
 				data, err := os.ReadFile(imgPath)
 				if err != nil {
-					m.lines = append(m.lines, line{lineError, stErr.Render("gagal baca: " + err.Error())})
+					m.flashMsg("gagal baca: " + err.Error(), "error")
 				} else {
 					// Add as user message with image content (base64 data URL).
 					b64 := encodeBase64(data)
@@ -714,7 +756,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			prompt := "Run the test suite for this project. If tests fail, debug the failures, fix the code, and re-run until all tests pass. Report the final result."
 			m.runTurn(prompt)
 		default:
-			m.lines = append(m.lines, line{lineError, stErr.Render("perintah tidak dikenal: " + fields[0])})
+			m.flashMsg("perintah tidak dikenal: " + fields[0], "error")
 		}
 		m.input.Reset()
 		m.refresh()
@@ -821,9 +863,19 @@ func (m model) View() string {
 	if m.clarifyQuestion != "" {
 		clarifyBar = stBanner.Render("◆ " + m.clarifyQuestion)
 	}
+	// Flash card (floating error/info popup).
+	flashBar := ""
+	if m.flash != "" {
+		if m.flashKind == "error" {
+			flashBar = stFlashErr.Render(m.flash)
+		} else {
+			flashBar = stFlashInfo.Render(m.flash)
+		}
+	}
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		m.vp.View(),
 		clarifyBar,
+		flashBar,
 		stInput.Render(m.input.View()),
 		statusBar,
 		stHelp.Render("Enter kirim • Ctrl+P model • Ctrl+R sesi • Ctrl+S simpan • Ctrl+L bersih • ↑↓ history • PgUp/Dn scroll • Ctrl+C keluar"),
@@ -839,10 +891,25 @@ func (m model) View() string {
 	}
 	// Auto-suggest: show available slash commands when typing /
 	if strings.HasPrefix(m.input.Value(), "/") && !strings.Contains(m.input.Value(), " ") {
-		suggest := suggestCommands(m.input.Value())
-		if suggest != "" {
-			body = lipgloss.JoinVertical(lipgloss.Left, body, suggest)
+		matches := matchingCommands(m.input.Value())
+		if !m.cmdPicker.active {
+			m.cmdPicker.active = true
+			m.cmdPicker.items = matches
+			m.cmdPicker.cursor = 0
+		} else {
+			m.cmdPicker.items = matches
+			if m.cmdPicker.cursor >= len(matches) {
+				m.cmdPicker.cursor = 0
+			}
 		}
+		if len(matches) > 0 {
+			suggest := renderCmdPicker(m.cmdPicker.items, m.cmdPicker.cursor)
+			if suggest != "" {
+				body = lipgloss.JoinVertical(lipgloss.Left, body, suggest)
+			}
+		}
+	} else {
+		m.cmdPicker.active = false
 	}
 	return body
 }
@@ -1164,8 +1231,8 @@ func (a *llmAdapter) Chat(ctx context.Context, messages []tools.LLMMessage) (str
 	return "", fmt.Errorf("no content in response")
 }
 
-// suggestCommands returns a formatted list of slash commands matching the prefix.
-func suggestCommands(prefix string) string {
+// matchingCommands returns slash commands that match the prefix.
+func matchingCommands(prefix string) []string {
 	all := []string{
 		"/help", "/new", "/resume", "/compress", "/skills",
 		"/model", "/memory add", "/memory del", "/todo", "/quit",
@@ -1181,10 +1248,43 @@ func suggestCommands(prefix string) string {
 			matches = append(matches, c)
 		}
 	}
-	if len(matches) == 0 {
+	return matches
+}
+
+// renderCmdPicker draws the scrollable command picker card.
+func renderCmdPicker(items []string, cursor int) string {
+	if len(items) == 0 {
 		return ""
 	}
-	return stMuted.Render(strings.Join(matches, "  "))
+	const win = 10
+	var b strings.Builder
+	start, end := 0, len(items)
+	if end > win {
+		start = cursor - win/2
+		if start < 0 {
+			start = 0
+		}
+		if start+win > end {
+			start = end - win
+		}
+		end = start + win
+	}
+	for i := start; i < end; i++ {
+		if i > start {
+			b.WriteString("\n")
+		}
+		if i == cursor {
+			b.WriteString(pkCur.Render("❯ " + items[i]))
+		} else {
+			b.WriteString(pkItem.Render("  " + items[i]))
+		}
+	}
+	if len(items) > win {
+		b.WriteString("\n" + stMuted.Render(fmt.Sprintf("  %d/%d  ↑↓ pilih  Enter ok  esc batal", cursor+1, len(items))))
+	} else {
+		b.WriteString("\n" + stMuted.Render("↑↓ pilih  Enter ok  esc batal"))
+	}
+	return stFlashInfo.Render(b.String())
 }
 
 // ---- retry / undo (TUI) ----
@@ -1293,18 +1393,18 @@ func (m *model) handleRollback(fields []string) {
 		}
 	case "restore":
 		if len(fields) < 3 {
-			m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /rollback restore <hash>")})
+			m.flashMsg("pakai: /rollback restore <hash>", "error")
 			return
 		}
 		hash := fields[2]
 		out, err := exec.Command("git", "-C", m.ag.Workdir, "reset", "--hard", hash).CombinedOutput()
 		if err != nil {
-			m.lines = append(m.lines, line{lineError, stErr.Render("rollback gagal: " + string(out))})
+			m.flashMsg("rollback gagal: " + string(out), "error")
 		} else {
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render("rollback ke " + hash + " — file dikembalikan")})
 		}
 	default:
-		m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /rollback [save|restore <hash>]")})
+		m.flashMsg("pakai: /rollback [save|restore <hash>]", "error")
 	}
 	m.refresh()
 }
@@ -1412,6 +1512,18 @@ func truncateStr(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// flashMsg shows a temporary floating card above the input.
+// It clears automatically on the next action.
+func (m *model) flashMsg(msg, kind string) {
+	m.flash = msg
+	m.flashKind = kind
+}
+
+func (m *model) clearFlash() {
+	m.flash = ""
+	m.flashKind = ""
 }
 
 // ---- clipboard + base64 helpers ----

@@ -4,9 +4,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/hirotomasato/hiroto/internal/config"
@@ -132,64 +129,7 @@ func bannerLines(width int, modelInfo string, skillCount int) []string {
 		rule,
 		"",
 	)
-
-	// Project context card (Hermes-style).
-	if box := projectContextBox(bannerW); box != "" {
-		out = append(out, box, "")
-	}
-
 	return out
-}
-
-// stCard is the style for the project context card box.
-var stCard = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color("#E8A33D")).
-	Padding(0, 1)
-
-// projectContextBox returns a small card showing the detected project and context files.
-func projectContextBox(width int) string {
-	wd, _ := os.Getwd()
-	projectName := filepath.Base(wd)
-
-	// Try to get the git repo name.
-	if out, err := exec.Command("git", "rev-parse", "--show-toplevel").CombinedOutput(); err == nil {
-		root := strings.TrimSpace(string(out))
-		projectName = filepath.Base(root)
-	}
-
-	// Detect context files.
-	var files []string
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md", ".cursorrules", ".hermes.md"} {
-		if _, err := os.Stat(filepath.Join(wd, name)); err == nil {
-			files = append(files, name)
-		}
-	}
-	// Also check for git repo.
-	isGit := false
-	if _, err := os.Stat(filepath.Join(wd, ".git")); err == nil {
-		isGit = true
-	}
-
-	if len(files) == 0 && !isGit {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString(stBanner.Render("◆ ") + projectName)
-	if len(files) > 0 {
-		b.WriteString("\n" + stMuted.Render("context: "+strings.Join(files, ", ")))
-	}
-	if isGit {
-		b.WriteString("\n" + stMuted.Render("git repo · skill index: auto"))
-	}
-	b.WriteString("\n" + stMuted.Render("AGENTS.md, CLAUDE.md, .cursorrules → auto-inject"))
-
-	box := stCard.Render(b.String())
-	if width > 0 {
-		box = centerPad(box, width)
-	}
-	return box
 }
 
 func ruleWidth(width int) int {
