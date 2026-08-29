@@ -2,8 +2,7 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
 jobs:
   release:
@@ -12,17 +11,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Go
-        run: |
-          curl -sL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz | tar xz -C /usr/local
-          echo "/usr/local/go/bin" >> $GITHUB_PATH
-
-      - name: Build
-        run: CGO_ENABLED=0 go build -o hiroto-linux-amd64 ./cmd/hiroto
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: hiroto-linux-amd64
-          generate_release_notes: true
+      - run: CGO_ENABLED=0 go build -o hiroto ./cmd/hiroto
+      - run: |
+          gh release create ${{ github.ref_name }} hiroto \
+            --title "Hiroto ${{ github.ref_name }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
