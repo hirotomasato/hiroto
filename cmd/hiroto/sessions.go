@@ -137,8 +137,11 @@ func (m *model) loadSessionByID(id string) bool {
 }
 
 // openModelPicker lists live models from the endpoint; picking persists to config.yaml.
+// Models are auto-grouped by provider prefix (the part before the first '/').
 func (m *model) openModelPicker() {
-	models, err := m.ag.Client.ListModels(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	models, err := m.ag.Client.ListModels(ctx)
 	if err != nil {
 		m.lines = append(m.lines, line{lineError, stErr.Render("gagal ambil daftar model: " + err.Error())})
 		m.refresh()
@@ -149,19 +152,84 @@ func (m *model) openModelPicker() {
 		m.refresh()
 		return
 	}
-	display := make([]string, len(models))
-	for i, name := range models {
-		display[i] = name
-		if name == m.ag.Client.Model {
-			display[i] = name + "  ● aktif"
-		}
-	}
-	m.picker = newPicker("pilih model", display, models, func(mm *model, name string) {
+	display, values, headers := groupModelsByProvider(models, m.ag.Client.Model)
+	m.picker = newPicker("pilih model", display, values, func(mm *model, name string) {
 		mm.ag.Client.Model = name
 		mm.cfg.Model.Name = name
 		config.SaveModel(name)
 		mm.lines = append(mm.lines, line{lineInfo, stMuted.Render("model: " + name + " (tersimpan)")})
 	})
+	m.picker.setHeaders(headers)
+}
+
+// groupModelsByProvider partitions models by their provider prefix (the part
+// before the first '/'). Models without a prefix go into a "default" group.
+// Returns display lines, corresponding values, and a header mask.
+func groupModelsByProvider(models []string, active string) (display, values []string, headers []bool) {
+	// Group by provider prefix.
+	groups := make(map[string][]string)
+	var groupOrder []string
+	for _, name := range models {
+		prefix := "default"
+		if idx := strings.IndexByte(name, '/'); idx >= 0 {
+			prefix = name[:idx]
+		}
+		if _, ok := groups[prefix]; !ok {
+			groupOrder = append(groupOrder, prefix)
+		}
+		groups[prefix] = append(groups[prefix], name)
+	}
+	// Sort groups alphabetically, but keep "default" at the top.
+	sortGroupOrder(groupOrder)
+	// Build display with headers.
+	for _, grp := range groupOrder {
+		mdls := groups[grp]
+		// Sort models within the group.
+		sortModels(mdls)
+		// Header line.
+		display = append(display, "── "+grp+" ──")
+		values = append(values, "")
+		headers = append(headers, true)
+		// Model lines.
+		for _, name := range mdls {
+			label := name
+			if name == active {
+				label = name + "  ● aktif"
+			}
+			display = append(display, "  "+label)
+			values = append(values, name)
+			headers = append(headers, false)
+		}
+	}
+	return display, values, headers
+}
+
+// sortGroupOrder sorts providers alphabetically, but puts "default" first.
+func sortGroupOrder(groups []string) {
+	// Bubble sort — small N, readable.
+	for i := 0; i < len(groups); i++ {
+		for j := i + 1; j < len(groups); j++ {
+			ai, aj := groups[i], groups[j]
+			// "default" always first.
+			if ai == "default" {
+				continue
+			}
+			if aj == "default" || aj < ai {
+				groups[i], groups[j] = groups[j], groups[i]
+			}
+		}
+	}
+}
+
+// sortModels sorts model names alphabetically in-place.
+func sortModels(names []string) {
+	for i := 0; i < len(names); i++ {
+		for j := i + 1; j < len(names); j++ {
+			if names[j] < names[i] {
+				names[i], names[j] = names[j], names[i]
+			}
+		}
+	}
 }
 
 // runOneShotContinue runs a one-shot query preloaded with the last saved
@@ -244,7 +312,9 @@ func runResumeTUI(cfg *config.Config, mem *memory.Store, id string) error {
 // runModelsCmd is the standalone `hiroto --models` picker.
 func runModelsCmd(cfg *config.Config) {
 	client := llm.New(cfg.Model.BaseURL, cfg.APIKey(), cfg.Model.Name)
-	models, err := client.ListModels(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	models, err := client.ListModels(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hiroto:", err)
 		os.Exit(1)
@@ -253,17 +323,15 @@ func runModelsCmd(cfg *config.Config) {
 		fmt.Fprintln(os.Stderr, "hiroto: endpoint tidak mengembalikan model")
 		os.Exit(1)
 	}
-	display := make([]string, len(models))
-	for i, name := range models {
-		display[i] = name
-		if name == cfg.Model.Name {
-			display[i] = name + "  ● aktif"
-		}
-	}
+	display, values, _ := groupModelsByProvider(models, cfg.Model.Name)
 	idx := runCLIPicker("pilih model (tersimpan ke config.yaml)", display)
-	if idx < 0 || idx >= len(models) {
+	if idx < 0 || idx >= len(values) {
 		return
 	}
-	config.SaveModel(models[idx])
-	fmt.Println("model tersimpan:", models[idx])
+	name := values[idx]
+	if name == "" {
+		return // header line
+	}
+	config.SaveModel(name)
+	fmt.Println("model tersimpan:", name)
 }

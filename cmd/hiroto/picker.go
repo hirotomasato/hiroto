@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	pkTitle = lipgloss.NewStyle().Bold(true).Foreground(cPrimary)
-	pkBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBgFaint).Padding(0, 1)
-	pkCur   = lipgloss.NewStyle().Bold(true).Foreground(cPrimary)
-	pkItem  = lipgloss.NewStyle().Foreground(cMuted)
+	pkTitle  = lipgloss.NewStyle().Bold(true).Foreground(cPrimary)
+	pkBox    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBgFaint).Padding(0, 1)
+	pkCur    = lipgloss.NewStyle().Bold(true).Foreground(cPrimary)
+	pkItem   = lipgloss.NewStyle().Foreground(cMuted)
+	pkHeader = lipgloss.NewStyle().Foreground(cPrimary).Faint(true)
 )
 
 // pickerState is the in-TUI overlay state.
@@ -27,6 +28,7 @@ type pickerState struct {
 	allVals  []string // picked values, parallel to allItems
 	items    []string // filtered display lines
 	values   []string // filtered values
+	isHeader []bool   // parallel to items; true = group header (non-selectable)
 	cursor   int
 	filter   string
 	onPick   func(m *model, v string)
@@ -46,13 +48,25 @@ func newPicker(title string, items, values []string, onPick func(*model, string)
 	return p
 }
 
+// setHeaders marks certain indices in allItems as group headers (non-selectable).
+// Must be called after newPicker and before the picker is displayed.
+func (p *pickerState) setHeaders(headers []bool) {
+	p.isHeader = headers
+	// Re-apply filter to sync isHeader with items/values.
+	p.applyFilter()
+}
+
 // applyFilter rebuilds the visible items/values from the current filter.
 // Empty query shows everything; otherwise items are fuzzy-matched against the
-// query and ranked so the best hits sort first.
+// query and ranked so the best hits sort first. Group headers are always kept
+// when their group has at least one visible child, but hidden when the group
+// is empty after filtering.
 func (p *pickerState) applyFilter() {
 	q := strings.ToLower(strings.TrimSpace(p.filter))
 	p.items = nil
 	p.values = nil
+	// Build a new isHeader slice for the filtered view.
+	var filtHeaders []bool
 
 	type scored struct {
 		i     int
@@ -60,6 +74,16 @@ func (p *pickerState) applyFilter() {
 	}
 	var ranked []scored
 	for i, it := range p.allItems {
+		// Headers are always included in unfiltered view; they don't get scored.
+		if len(p.isHeader) > i && p.isHeader[i] {
+			if q == "" {
+				p.items = append(p.items, it)
+				p.values = append(p.values, p.allVals[i])
+				filtHeaders = append(filtHeaders, true)
+			}
+			// When filtering, headers are added later if their group has matches.
+			continue
+		}
 		if q == "" {
 			ranked = append(ranked, scored{i, 0})
 			continue
@@ -74,16 +98,71 @@ func (p *pickerState) applyFilter() {
 			ranked[j], ranked[j-1] = ranked[j-1], ranked[j]
 		}
 	}
-	for _, r := range ranked {
-		p.items = append(p.items, p.allItems[r.i])
-		p.values = append(p.values, p.allVals[r.i])
+	// When filtering, re-insert headers before their group's items.
+	if q != "" && len(p.isHeader) > 0 {
+		lastHeader := -1
+		for _, r := range ranked {
+			// Find the header that precedes this item in the original order.
+			hdr := p.findGroupHeader(r.i)
+			if hdr != lastHeader {
+				// Insert the header.
+				if hdr >= 0 {
+					p.items = append(p.items, p.allItems[hdr])
+					p.values = append(p.values, p.allVals[hdr])
+					filtHeaders = append(filtHeaders, true)
+				}
+				lastHeader = hdr
+			}
+			p.items = append(p.items, p.allItems[r.i])
+			p.values = append(p.values, p.allVals[r.i])
+			filtHeaders = append(filtHeaders, false)
+		}
+	} else {
+		for _, r := range ranked {
+			p.items = append(p.items, p.allItems[r.i])
+			p.values = append(p.values, p.allVals[r.i])
+			filtHeaders = append(filtHeaders, false)
+		}
 	}
+
+	p.isHeader = filtHeaders
 
 	if len(p.items) == 0 {
 		p.cursor = -1
 	} else if p.cursor < 0 || p.cursor >= len(p.items) {
 		p.cursor = 0
 	}
+	// If cursor landed on a header, move to first non-header.
+	if p.cursor >= 0 && p.cursor < len(p.isHeader) && p.isHeader[p.cursor] {
+		p.cursor = p.nextNonHeader(p.cursor)
+	}
+}
+
+// findGroupHeader returns the index in allItems of the group header that
+// precedes the given item index, or -1 if none.
+func (p *pickerState) findGroupHeader(itemIdx int) int {
+	for i := itemIdx; i >= 0; i-- {
+		if len(p.isHeader) > i && p.isHeader[i] {
+			return i
+		}
+	}
+	return -1
+}
+
+// nextNonHeader returns the next index that is not a header, or current if none.
+func (p *pickerState) nextNonHeader(from int) int {
+	for i := from; i < len(p.items); i++ {
+		if !p.isHeader[i] {
+			return i
+		}
+	}
+	// Search backward.
+	for i := from - 1; i >= 0; i-- {
+		if !p.isHeader[i] {
+			return i
+		}
+	}
+	return from
 }
 
 // fuzzyScore reports whether q matches text as a fuzzy subsequence and, if so,
@@ -155,18 +234,35 @@ func (m *model) updatePicker(msg tea.KeyMsg) bool {
 	case "up", "k":
 		if p.cursor > 0 {
 			p.cursor--
+			// Skip headers backward.
+			for p.cursor >= 0 && p.cursor < len(p.isHeader) && p.isHeader[p.cursor] {
+				p.cursor--
+			}
+			if p.cursor < 0 {
+				p.cursor = 0
+			}
 		}
 	case "down", "j":
 		if p.cursor < len(p.items)-1 {
 			p.cursor++
+			// Skip headers forward.
+			for p.cursor < len(p.items) && p.cursor < len(p.isHeader) && p.isHeader[p.cursor] {
+				p.cursor++
+			}
+			if p.cursor >= len(p.items) {
+				p.cursor = len(p.items) - 1
+			}
 		}
 	case "home", "g":
 		if len(p.items) > 0 {
-			p.cursor = 0
+			p.cursor = p.nextNonHeader(0)
 		}
 	case "end", "G":
 		if len(p.items) > 0 {
 			p.cursor = len(p.items) - 1
+			for p.cursor >= 0 && p.cursor < len(p.isHeader) && p.isHeader[p.cursor] {
+				p.cursor--
+			}
 		}
 	case "backspace":
 		if p.filter != "" {
@@ -230,10 +326,20 @@ func (m *model) renderPicker() string {
 		}
 		for i := start; i < end; i++ {
 			marker, style := "  ", pkItem
+			isHdr := i < len(p.isHeader) && p.isHeader[i]
+			if isHdr {
+				marker, style = "  ", pkHeader
+			}
 			if i == p.cursor {
 				marker, style = "❯ ", pkCur
 			}
-			b.WriteString(style.Render(marker+p.items[i]) + "\n")
+			line := marker + p.items[i]
+			if isHdr {
+				line = pkHeader.Render(line)
+			} else {
+				line = style.Render(line)
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 

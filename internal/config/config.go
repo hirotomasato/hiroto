@@ -12,9 +12,10 @@ import (
 // Config mirrors Hiroto's design: settings in config.yaml, secrets in .env.
 type Config struct {
 	Model struct {
-		BaseURL   string `yaml:"base_url"`
-		Name      string `yaml:"model"`
-		APIKeyEnv string `yaml:"api_key"` // literal key or ${ENV_NAME}
+		BaseURL   string   `yaml:"base_url"`
+		Name      string   `yaml:"model"`
+		APIKeyEnv string   `yaml:"api_key"` // literal key or ${ENV_NAME}
+		Available []string `yaml:"available"` // cached model list from /v1/models
 	} `yaml:"model"`
 	Agent struct {
 		MaxTurns          int    `yaml:"max_turns"`
