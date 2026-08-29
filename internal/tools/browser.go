@@ -99,6 +99,56 @@ func fileSize(p string) int64 {
 	return 0
 }
 
+// ---- LSP diagnostics ----
+
+func lspCheck(path string) string {
+	ext := filepath.Ext(path)
+	switch ext {
+	case ".go":
+		// Run go vet on the file's package.
+		dir := filepath.Dir(path)
+		cmd := exec.Command("go", "vet", ".")
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		text := strings.TrimSpace(string(out))
+		if err != nil && text != "" {
+			return "LSP (go vet):\n" + text
+		}
+	case ".py":
+		cmd := exec.Command("python3", "-m", "py_compile", path)
+		out, err := cmd.CombinedOutput()
+		text := strings.TrimSpace(string(out))
+		if err != nil && text != "" {
+			return "LSP (py_compile):\n" + text
+		}
+	case ".rs":
+		// Check if cargo is available in the parent dir.
+		cmd := exec.Command("cargo", "check", "--message-format=short")
+		cmd.Dir = filepath.Dir(path)
+		out, _ := cmd.CombinedOutput()
+		text := strings.TrimSpace(string(out))
+		if text != "" {
+			return "LSP (cargo check):\n" + text
+		}
+	case ".ts", ".tsx", ".js", ".jsx":
+		cmd := exec.Command("npx", "tsc", "--noEmit", "--pretty", path)
+		out, _ := cmd.CombinedOutput()
+		text := strings.TrimSpace(string(out))
+		if text != "" {
+			return "LSP (tsc):\n" + text
+		}
+	}
+	return ""
+}
+
+// autoCheckpoint creates a git snapshot before destructive operations.
+// It is silent on failure (no git repo, no changes, etc.).
+func autoCheckpoint(workdir string) {
+	exec.Command("git", "-C", workdir, "add", "-A").Run()
+	ts := time.Now().Format("2006-01-02 15:04:05")
+	exec.Command("git", "-C", workdir, "commit", "--allow-empty", "-m", "hiroto auto-checkpoint "+ts).Run()
+}
+
 func htmlToText(s string) string {
 	s = strings.NewReplacer("<br>", "\n", "<br/>", "\n", "<br />", "\n", "<p>", "\n", "</p>", "\n", "<li>", "\n- ").Replace(s)
 	for {

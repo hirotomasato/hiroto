@@ -11,12 +11,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hirotomasato/hiroto/internal/agent"
+	"github.com/hirotomasato/hiroto/internal/api"
 	"github.com/hirotomasato/hiroto/internal/config"
 	"github.com/hirotomasato/hiroto/internal/gateway"
 	"github.com/hirotomasato/hiroto/internal/llm"
@@ -103,6 +105,12 @@ type model struct {
 	histIdx int
 
 	startedAt time.Time // session start (exit summary duration)
+
+	streaming bool // true when assistant is writing text (vs thinking or running tools)
+	verbose   int  // 0=compact, 1=full (tool output verbosity)
+	steerCh   chan string
+	goal      string // standing goal across turns
+	reasoning string // reasoning effort level
 }
 
 func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *session.Store) model {
@@ -152,7 +160,14 @@ func (m *model) renderAgentEvent(e agent.Event) line {
 		return line{lineTool, stToolTag.Render("⚒ "+e.ToolName) + stMuted.Render(" …")}
 	case "tool_end":
 		head := stToolTag.Render("⚒ "+e.ToolName) + stMuted.Render(fmt.Sprintf(" (%.1fs)", e.Duration.Seconds()))
-		body := strings.Join(strings.Split(e.Text, "\n")[:minInt(3, len(strings.Split(e.Text, "\n")))], "\n")
+		body := e.Text
+		// Verbose: 0=compact (first few lines), 1=full, 2=log (all)
+		if m.verbose == 0 {
+			lines := strings.Split(body, "\n")
+			if len(lines) > 3 {
+				body = strings.Join(lines[:3], "\n") + "\n…"
+			}
+		}
 		if len(body) > 300 {
 			body = body[:300] + "…"
 		}
@@ -180,6 +195,9 @@ func (m *model) runTurn(text string) {
 	m.busy = true
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
+	// Steer channel: buffer of 1 so /steer doesn't block.
+	m.steerCh = make(chan string, 1)
+	m.ag.SteerCh = m.steerCh
 	go func() {
 		defer cancel()
 		_, err := m.ag.Run(ctx, text, func(chunk string) {
@@ -261,6 +279,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.busy && m.cancel != nil {
 				m.cancel()
 				m.busy = false
+				m.streaming = false
 				m.lines = append(m.lines, line{lineInfo, stMuted.Render("(dibatalkan)")})
 				m.refresh()
 				return m, nil
@@ -349,11 +368,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case streamMsg:
+		m.streaming = true
 		m.appendStream(string(msg))
 		m.refresh()
 		cmds = append(cmds, waitForActivity())
 
 	case eventMsg:
+		m.streaming = false
 		if msg.Type == "tool_start" {
 			m.lines = append(m.lines, m.renderAgentEvent(msg))
 		} else if msg.Type == "tool_end" {
@@ -366,6 +387,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case assistantDoneMsg:
 		m.busy = false
+		m.streaming = false
 		m.endAssistantLine()
 		m.saveSession()
 		m.refresh()
@@ -390,12 +412,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
+	// Expand @-syntax context references before processing.
+	text = expandContextRefs(text, m.ag.Workdir)
+
 	// slash commands (Hiroto-style)
 	if strings.HasPrefix(text, "/") {
 		switch fields := strings.Fields(text); fields[0] {
 		case "/help":
 			m.lines = append(m.lines,
-				line{lineInfo, stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /todo /quit")},
+				line{lineInfo, stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo /quit")},
 			)
 		case "/quit", "/exit":
 			m.saveSession()
@@ -468,6 +493,226 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			}
 		case "/todo":
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render("todo dibaca via tool oleh agent")})
+		case "/retry":
+			m.handleRetry()
+		case "/undo":
+			m.handleUndo()
+		case "/diff":
+			out, _ := exec.Command("git", "-C", m.ag.Workdir, "diff", "--stat").CombinedOutput()
+			text := strings.TrimSpace(string(out))
+			if text == "" {
+				text = "(tidak ada perubahan)"
+			}
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render(text)})
+		case "/stop":
+			n := tools.KillAll()
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("mematikan %d proses background", n))})
+		case "/steer":
+			if len(fields) < 2 {
+				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /steer <pesan>")})
+			} else if m.busy && m.steerCh != nil {
+				msg := strings.Join(fields[1:], " ")
+				select {
+				case m.steerCh <- msg:
+					m.lines = append(m.lines, line{lineInfo, stMuted.Render("steer: " + msg)})
+				default:
+					m.lines = append(m.lines, line{lineError, stErr.Render("steer: channel penuh, coba lagi")})
+				}
+			} else {
+				m.lines = append(m.lines, line{lineError, stErr.Render("agent sedang tidak sibuk")})
+			}
+		case "/verbose":
+			m.verbose = (m.verbose + 1) % 3
+			labels := []string{"compact", "full", "log"}
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("verbose: " + labels[m.verbose])})
+		case "/usage":
+			tokens := estimateTokens(m.ag.Messages)
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("~%d token · %d pesan · %d turn", tokens, len(m.ag.Messages), countUserTurns(m.ag.Messages)))})
+		case "/rollback":
+			m.handleRollback(fields)
+		case "/prompt":
+			// Open $EDITOR for composing a long prompt.
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "vim"
+			}
+			tmp, _ := os.CreateTemp("", "hiroto-prompt-*.md")
+			tmp.Close()
+			cmd := exec.Command(editor, tmp.Name())
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				m.lines = append(m.lines, line{lineError, stErr.Render("editor: " + err.Error())})
+			} else {
+				data, _ := os.ReadFile(tmp.Name())
+				text := strings.TrimSpace(string(data))
+				os.Remove(tmp.Name())
+				if text != "" {
+					return m.handleSubmit(text)
+				}
+			}
+		case "/bg":
+			if len(fields) < 2 {
+				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /bg <prompt>")})
+			} else {
+				bgText := strings.Join(fields[1:], " ")
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("background: " + truncateStr(bgText, 80))})
+				m.refresh()
+				go func() {
+					ag2 := m.ag // shallow copy — same client, separate messages
+					messages := make([]llm.Message, len(ag2.Messages))
+					copy(messages, ag2.Messages)
+					ag2.Messages = messages
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					defer cancel()
+					_, err := ag2.Run(ctx, bgText, nil)
+					if err != nil {
+						streamCh <- eventMsg(agent.Event{Type: "error", Text: "bg: " + err.Error()})
+					} else {
+						streamCh <- eventMsg(agent.Event{Type: "error", Text: "✓ bg: selesai — " + truncateStr(bgText, 60)})
+					}
+				}()
+			}
+		case "/goal":
+			if len(fields) < 2 {
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("goal: " + m.goal)})
+			} else {
+				m.goal = strings.Join(fields[1:], " ")
+				m.ag.Goal = m.goal
+				m.lines = append(m.lines, line{lineInfo, stBanner.Render("◆ goal: " + m.goal)})
+			}
+		case "/branch":
+			m.saveSession()
+			oldID := m.sessID
+			m.sessID = newSessionID()
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("branch: %s → %s", oldID, m.sessID))})
+		case "/copy":
+			// Copy last assistant response to clipboard.
+			last := ""
+			for i := len(m.lines) - 1; i >= 0; i-- {
+				if m.lines[i].kind == lineAssistant {
+					last = m.lines[i].text
+					break
+				}
+			}
+			if last == "" {
+				m.lines = append(m.lines, line{lineError, stErr.Render("tidak ada response untuk disalin")})
+			} else {
+				copyToClipboard(last)
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("disalin ke clipboard")})
+			}
+		case "/title":
+			if len(fields) < 2 {
+				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /title <judul>")})
+			} else {
+				m.sessID = strings.Join(fields[1:], " ")
+				m.saveSession()
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi: " + m.sessID)})
+			}
+		case "/reload":
+			// Re-scan skills directory.
+			m.ag.Skills = skills.Discover(m.cfg.Skills.Dirs)
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("reload: %d skill", len(m.ag.Skills)))})
+		case "/image":
+			if len(fields) < 2 {
+				m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /image <path>")})
+			} else {
+				imgPath := strings.Join(fields[1:], " ")
+				data, err := os.ReadFile(imgPath)
+				if err != nil {
+					m.lines = append(m.lines, line{lineError, stErr.Render("gagal baca: " + err.Error())})
+				} else {
+					// Add as user message with image content (base64 data URL).
+					b64 := encodeBase64(data)
+					ext := strings.ToLower(filepath.Ext(imgPath))
+					mime := "image/png"
+					switch ext {
+					case ".jpg", ".jpeg":
+						mime = "image/jpeg"
+					case ".gif":
+						mime = "image/gif"
+					case ".webp":
+						mime = "image/webp"
+					}
+					dataURL := "data:" + mime + ";base64," + b64
+					m.lines = append(m.lines, line{lineUser, "[image: " + imgPath + "]"})
+					m.lines = append(m.lines, line{lineAssistant, ""})
+					m.input.Reset()
+					m.busy = true
+					m.streaming = false
+					m.refresh()
+					// Send as multimodal message.
+					m.ag.Messages = append(m.ag.Messages, llm.Message{
+						Role: llm.RoleUser,
+						Content: []llm.ContentPart{
+							{Type: "image_url", ImageURL: map[string]string{"url": dataURL}},
+						},
+					})
+					m.runTurnSilent("Describe this image.")
+				}
+			}
+		case "/config":
+			cfg := m.cfg
+			var b strings.Builder
+			b.WriteString(fmt.Sprintf("model: %s\n", cfg.Model.Name))
+			b.WriteString(fmt.Sprintf("base_url: %s\n", cfg.Model.BaseURL))
+			b.WriteString(fmt.Sprintf("max_turns: %d\n", cfg.Agent.MaxTurns))
+			b.WriteString(fmt.Sprintf("skills: %d\n", len(m.ag.Skills)))
+			b.WriteString(fmt.Sprintf("gateway: %v\n", cfg.Gateway.TelegramToken != ""))
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("◆ config\n" + b.String())})
+		case "/reasoning":
+			if len(fields) < 2 {
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + m.reasoning)})
+			} else {
+				m.reasoning = fields[1]
+				m.ag.Reasoning = m.reasoning
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + m.reasoning)})
+			}
+		case "/review":
+			// Review the current git diff and provide feedback.
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("reviewing changes…")})
+			m.lines = append(m.lines, line{lineAssistant, ""})
+			m.input.Reset()
+			m.busy = true
+			m.streaming = false
+			m.refresh()
+			out, _ := exec.Command("git", "-C", m.ag.Workdir, "diff").CombinedOutput()
+			diff := string(out)
+			if diff == "" {
+				diff = "(tidak ada perubahan — coba git diff --cached untuk staged changes)"
+			}
+			prompt := "Review the following git diff. Point out bugs, style issues, security concerns, and suggest improvements. Be concise.\n\n```diff\n" + diff + "\n```"
+			m.runTurn(prompt)
+		case "/explain":
+			if len(fields) < 2 {
+				// Explain the current codebase structure.
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("explaining codebase…")})
+				m.lines = append(m.lines, line{lineAssistant, ""})
+				m.input.Reset()
+				m.busy = true
+				m.streaming = false
+				m.refresh()
+				m.runTurn("Explain the architecture and structure of this codebase. What are the main packages, their responsibilities, and how they connect?")
+			} else {
+				target := strings.Join(fields[1:], " ")
+				m.lines = append(m.lines, line{lineUser, "/explain " + target})
+				m.lines = append(m.lines, line{lineAssistant, ""})
+				m.input.Reset()
+				m.busy = true
+				m.streaming = false
+				m.refresh()
+				m.runTurn("Explain this code: " + target + ". What does it do, how does it work, and what are the key patterns?")
+			}
+		case "/test":
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("running tests…")})
+			m.lines = append(m.lines, line{lineAssistant, ""})
+			m.input.Reset()
+			m.busy = true
+			m.streaming = false
+			m.refresh()
+			prompt := "Run the test suite for this project. If tests fail, debug the failures, fix the code, and re-run until all tests pass. Report the final result."
+			m.runTurn(prompt)
 		default:
 			m.lines = append(m.lines, line{lineError, stErr.Render("perintah tidak dikenal: " + fields[0])})
 		}
@@ -478,6 +723,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 
 	m.history = append(m.history, text)
 	m.histIdx = -1
+	m.streaming = false
 	m.lines = append(m.lines, line{lineUser, text})
 	m.lines = append(m.lines, line{lineAssistant, ""})
 	m.input.Reset()
@@ -530,10 +776,17 @@ func (m *model) refresh() {
 	}
 	content := b.String()
 	if m.busy {
-		content += stMuted.Render(m.spinner.View() + " berpikir…")
+		label := "berpikir…"
+		if m.streaming {
+			label = "menulis…"
+		}
+		content += stMuted.Render(m.spinner.View() + " " + label)
 	}
+	atBottom := m.vp.AtBottom()
 	m.vp.SetContent(content)
-	m.vp.GotoBottom()
+	if atBottom {
+		m.vp.GotoBottom()
+	}
 }
 
 func (m model) View() string {
@@ -542,7 +795,11 @@ func (m model) View() string {
 	}
 	status := stMuted.Render("siap")
 	if m.busy {
-		status = stToolTag.Render(m.spinner.View() + " bekerja…")
+		label := "bekerja…"
+		if m.streaming {
+			label = "menulis…"
+		}
+		status = stToolTag.Render(m.spinner.View() + " " + label)
 	}
 	left := stChip.Render(" HR ") + stMuted.Render(" hiroto v"+version)
 	right := status
@@ -624,6 +881,12 @@ func main() {
 	// hiroto gateway  — start Telegram bot (and future WhatsApp)
 	if len(os.Args) >= 2 && os.Args[1] == "gateway" {
 		runGateway(cfg, mem)
+		return
+	}
+
+	// hiroto --api  — start OpenAI-compatible API server
+	if len(os.Args) >= 2 && os.Args[1] == "--api" {
+		runAPI(cfg, mem)
 		return
 	}
 
@@ -869,6 +1132,18 @@ func runGateway(cfg *config.Config, mem *memory.Store) {
 	log.Fatal(gateway.Telegram(token, ag))
 }
 
+// runAPI starts the OpenAI-compatible API server.
+func runAPI(cfg *config.Config, mem *memory.Store) {
+	port := cfg.API.Port
+	if port == 0 {
+		port = 20129
+	}
+	ag := buildAgent(cfg, mem)
+	api.PrintBanner(port, ag.Client.Model)
+	srv := api.New(ag, port)
+	log.Fatal(srv.Start())
+}
+
 // llmAdapter bridges tools.LLMClient to the internal LLM client.
 type llmAdapter struct {
 	client *llm.Client
@@ -894,6 +1169,11 @@ func suggestCommands(prefix string) string {
 	all := []string{
 		"/help", "/new", "/resume", "/compress", "/skills",
 		"/model", "/memory add", "/memory del", "/todo", "/quit",
+		"/retry", "/undo", "/diff", "/stop", "/steer",
+		"/verbose", "/usage", "/rollback",
+		"/prompt", "/bg", "/goal", "/branch", "/copy",
+		"/title", "/reload", "/image", "/config", "/reasoning",
+		"/review", "/explain", "/test",
 	}
 	var matches []string
 	for _, c := range all {
@@ -905,4 +1185,301 @@ func suggestCommands(prefix string) string {
 		return ""
 	}
 	return stMuted.Render(strings.Join(matches, "  "))
+}
+
+// ---- retry / undo (TUI) ----
+
+func (m *model) handleRetry() {
+	text, ok := popLastUserMsg(m.ag.Messages)
+	if !ok {
+		m.lines = append(m.lines, line{lineError, stErr.Render("tidak ada giliran user untuk diulang")})
+		m.refresh()
+		return
+	}
+	// Remove last user turn + everything after.
+	m.removeLastUserTurn()
+	// Remove the corresponding display lines.
+	m.stripLastUserTurnLines()
+	m.lines = append(m.lines, line{lineInfo, stMuted.Render("retry: " + truncateStr(text, 80))})
+	m.lines = append(m.lines, line{lineAssistant, ""})
+	m.input.Reset()
+	m.busy = true
+	m.streaming = false
+	m.refresh()
+	m.runTurn(text)
+}
+
+func (m *model) handleUndo() {
+	text, ok := popLastUserMsg(m.ag.Messages)
+	if !ok {
+		m.lines = append(m.lines, line{lineError, stErr.Render("tidak ada giliran user untuk dibatalkan")})
+		m.refresh()
+		return
+	}
+	m.removeLastUserTurn()
+	m.stripLastUserTurnLines()
+	m.lines = append(m.lines, line{lineInfo, stMuted.Render("undo: " + truncateStr(text, 80))})
+	m.refresh()
+}
+
+func (m *model) removeLastUserTurn() {
+	msgs := m.ag.Messages
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == llm.RoleUser {
+			m.ag.Messages = msgs[:i]
+			return
+		}
+	}
+}
+
+func (m *model) stripLastUserTurnLines() {
+	// Remove the last user line + everything after it in the display.
+	idx := -1
+	for i := len(m.lines) - 1; i >= 0; i-- {
+		if m.lines[i].kind == lineUser {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		m.lines = m.lines[:idx]
+	}
+}
+
+func popLastUserMsg(msgs []llm.Message) (string, bool) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == llm.RoleUser {
+			if s, ok := msgs[i].Content.(string); ok {
+				return s, true
+			}
+			return "", true
+		}
+	}
+	return "", false
+}
+
+// ---- rollback ----
+
+func (m *model) handleRollback(fields []string) {
+	// List checkpoints if no arg.
+	if len(fields) < 2 {
+		out, _ := exec.Command("git", "-C", m.ag.Workdir, "log", "--oneline", "-20", "--grep=hiroto checkpoint", "HEAD").CombinedOutput()
+		text := strings.TrimSpace(string(out))
+		if text == "" {
+			text = "(belum ada checkpoint — ketik /rollback save untuk buat)"
+		}
+		m.lines = append(m.lines, line{lineInfo, stMuted.Render("◆ rollback checkpoints\n" + text)})
+		m.refresh()
+		return
+	}
+	sub := fields[1]
+	switch sub {
+	case "save":
+		// Create a checkpoint commit.
+		exec.Command("git", "-C", m.ag.Workdir, "add", "-A").Run()
+		ts := time.Now().Format("15:04:05")
+		out, err := exec.Command("git", "-C", m.ag.Workdir, "commit", "--allow-empty", "-m", "hiroto checkpoint "+ts).CombinedOutput()
+		exit := 0
+		if err != nil {
+			if ee, ok := err.(*exec.ExitError); ok {
+				exit = ee.ExitCode()
+			}
+		}
+		// Exit code 1 = nothing to commit (not an error).
+		if exit == 1 {
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("tidak ada perubahan untuk di-checkpoint")})
+		} else {
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("checkpoint: " + strings.TrimSpace(string(out)))})
+		}
+	case "restore":
+		if len(fields) < 3 {
+			m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /rollback restore <hash>")})
+			return
+		}
+		hash := fields[2]
+		out, err := exec.Command("git", "-C", m.ag.Workdir, "reset", "--hard", hash).CombinedOutput()
+		if err != nil {
+			m.lines = append(m.lines, line{lineError, stErr.Render("rollback gagal: " + string(out))})
+		} else {
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("rollback ke " + hash + " — file dikembalikan")})
+		}
+	default:
+		m.lines = append(m.lines, line{lineError, stErr.Render("pakai: /rollback [save|restore <hash>]")})
+	}
+	m.refresh()
+}
+
+// ---- context expansion (@-syntax) ----
+
+func expandContextRefs(text, workdir string) string {
+	if !strings.Contains(text, "@") {
+		return text
+	}
+	var result strings.Builder
+	words := strings.Fields(text)
+	for _, word := range words {
+		if strings.HasPrefix(word, "@file:") {
+			path := strings.TrimPrefix(word, "@file:")
+			path = expandPath(path, workdir)
+			data, err := os.ReadFile(path)
+			if err == nil {
+				result.WriteString("\n\n[file: " + path + "]\n```\n")
+				content := string(data)
+				if len(content) > 8000 {
+					content = content[:8000] + "\n... (truncated)"
+				}
+				result.WriteString(content)
+				result.WriteString("\n```\n")
+			}
+		} else if strings.HasPrefix(word, "@folder:") {
+			path := strings.TrimPrefix(word, "@folder:")
+			path = expandPath(path, workdir)
+			entries, err := os.ReadDir(path)
+			if err == nil {
+				result.WriteString("\n\n[folder: " + path + "]\n")
+				for i, e := range entries {
+					if i >= 50 {
+						result.WriteString("... dan lainnya\n")
+						break
+					}
+					result.WriteString("  " + e.Name())
+					if e.IsDir() {
+						result.WriteString("/")
+					}
+					result.WriteString("\n")
+				}
+			}
+		} else if word == "@diff" {
+			out, _ := exec.Command("git", "-C", workdir, "diff", "--stat").CombinedOutput()
+			if len(out) > 0 {
+				result.WriteString("\n\n[git diff]\n```\n")
+				result.Write(out)
+				result.WriteString("```\n")
+			}
+		} else {
+			if result.Len() > 0 {
+				result.WriteString(" ")
+			}
+			result.WriteString(word)
+		}
+	}
+	expanded := result.String()
+	if expanded == "" {
+		return text
+	}
+	return expanded
+}
+
+func expandPath(path, workdir string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workdir, path)
+	}
+	return path
+}
+
+// ---- token estimation ----
+
+func estimateTokens(msgs []llm.Message) int {
+	total := 0
+	for _, m := range msgs {
+		if s, ok := m.Content.(string); ok {
+			// Rough: ~3 chars per token for English, ~2 for code.
+			total += len(s) / 3
+		}
+		for _, tc := range m.ToolCalls {
+			total += len(tc.Function.Name)/3 + len(tc.Function.Arguments)/3
+		}
+	}
+	return total
+}
+
+func countUserTurns(msgs []llm.Message) int {
+	n := 0
+	for _, m := range msgs {
+		if m.Role == llm.RoleUser {
+			n++
+		}
+	}
+	return n
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+// ---- clipboard + base64 helpers ----
+
+func copyToClipboard(text string) {
+	// Try xclip first, then wl-copy, then pbcopy (macOS).
+	for _, cmd := range [][]string{
+		{"xclip", "-selection", "clipboard"},
+		{"wl-copy"},
+		{"pbcopy"},
+	} {
+		c := exec.Command(cmd[0], cmd[1:]...)
+		c.Stdin = strings.NewReader(text)
+		if err := c.Run(); err == nil {
+			return
+		}
+	}
+}
+
+func encodeBase64(data []byte) string {
+	// Simple base64 encoding without importing encoding/base64 in main.
+	var b strings.Builder
+	alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	for i := 0; i < len(data); i += 3 {
+		var chunk [3]byte
+		chunk[0] = data[i]
+		if i+1 < len(data) {
+			chunk[1] = data[i+1]
+		}
+		if i+2 < len(data) {
+			chunk[2] = data[i+2]
+		}
+		b.WriteByte(alphabet[chunk[0]>>2])
+		b.WriteByte(alphabet[((chunk[0]&3)<<4)|(chunk[1]>>4)])
+		if i+1 < len(data) {
+			b.WriteByte(alphabet[((chunk[1]&15)<<2)|(chunk[2]>>6)])
+		} else {
+			b.WriteByte('=')
+		}
+		if i+2 < len(data) {
+			b.WriteByte(alphabet[chunk[2]&63])
+		} else {
+			b.WriteByte('=')
+		}
+	}
+	return b.String()
+}
+
+// runTurnSilent runs the agent without adding a new user message to the display.
+// Used by /image — the image content is already in Messages.
+func (m *model) runTurnSilent(text string) {
+	m.busy = true
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	m.steerCh = make(chan string, 1)
+	m.ag.SteerCh = m.steerCh
+	go func() {
+		defer cancel()
+		_, err := m.ag.Run(ctx, text, func(chunk string) {
+			chMu.Lock()
+			streamCh <- streamMsg(chunk)
+			chMu.Unlock()
+		})
+		chMu.Lock()
+		if err != nil {
+			streamCh <- eventMsg(agent.Event{Type: "error", Text: err.Error()})
+		}
+		streamCh <- assistantDoneMsg{}
+		chMu.Unlock()
+	}()
 }

@@ -100,16 +100,23 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 			"/resume — lanjut sesi tersimpan\n"+
 			"/memory — kelola memory\n"+
 			"/skills — daftar skill\n"+
+			"/retry — ulang giliran terakhir\n"+
+			"/undo — batalkan giliran terakhir\n"+
+			"/status — info sesi & model\n"+
 			"/help — bantuan", replyTo)
 		return
 
 	case "/help":
 		send(g.bot, chatID, "◆ Hiroto — bantuan\n\n"+
 			"/new — sesi baru\n"+
-			"/model — lihat model, /model <n> pilih\n"+
+			"/model — lihat model, /model <n> pilih, /model <nama> [--once]\n"+
 			"/resume — list sesi, /resume <id> lanjut\n"+
 			"/memory — lihat, /memory add <teks>, /memory del <id>\n"+
 			"/skills [kata] — cari skill\n"+
+			"/retry — ulang giliran terakhir\n"+
+			"/undo — batalkan giliran terakhir\n"+
+			"/status — info sesi & model\n"+
+			"/sessions [cari] — cari sesi\n"+
 			"/todo — catat tugas via agent", replyTo)
 		return
 
@@ -138,6 +145,22 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 		send(g.bot, chatID, "todo dibaca agent via tool — ketik aja tugasnya, agent yang catat.", replyTo)
 		return
 
+	case "/retry":
+		g.handleRetry(chatID, replyTo)
+		return
+
+	case "/undo":
+		g.handleUndo(chatID, replyTo)
+		return
+
+	case "/status":
+		g.handleStatus(chatID, replyTo)
+		return
+
+	case "/sessions":
+		g.handleSessions(chatID, arg, replyTo)
+		return
+
 	case "":
 		return
 	}
@@ -148,10 +171,6 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 	}
 
 	// ---- free-form message -> agent ----
-	log.Printf("[gateway] %s: %s", msg.From.UserName, text)
-	typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
-	g.bot.Send(typing)
-
 	st, ok := g.chats[chatID]
 	if !ok {
 		st = &chat{id: sessionIDFor(chatID)}
@@ -161,36 +180,7 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 		}
 		g.chats[chatID] = st
 	}
-	ag := g.ag
-	ag.Messages = st.messages
-
-	live := newLive(g.bot, chatID)
-	ag.Emit = func(e agent.Event) {
-		switch e.Type {
-		case "tool_start":
-			live.push("▸ " + e.ToolName + " …")
-		case "tool_end":
-			live.push("  ✓ " + e.ToolName + " (" + e.Duration.Round(100*time.Millisecond).String() + ")")
-		case "error":
-			live.push("  ✗ " + e.Text)
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	answer, err := ag.Run(ctx, text, live.text)
-	cancel()
-	ag.Emit = nil
-	st.messages = ag.Messages
-
-	if err != nil {
-		live.finish("✗ error: " + err.Error())
-		return
-	}
-	if answer == "" {
-		answer = "(done)"
-	}
-	g.saveChat(st)
-	live.finish(answer)
+	g.runAgentTurn(chatID, st, text, replyTo)
 }
 
 // saveChat persists this chat's conversation under its stable session id so
@@ -251,6 +241,16 @@ func toStored(msgs []llm.Message) []session.StoredMessage {
 // ---- command handlers ----
 
 func (g *gw) handleModel(chatID int64, arg string, replyTo int) {
+	// Parse flags: --once changes model for this session only.
+	once := false
+	if strings.HasSuffix(arg, " --once") {
+		once = true
+		arg = strings.TrimSuffix(arg, " --once")
+	}
+	if strings.HasSuffix(arg, " --global") {
+		arg = strings.TrimSuffix(arg, " --global")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	models, err := g.ag.Client.ListModels(ctx)
@@ -267,15 +267,27 @@ func (g *gw) handleModel(chatID int64, arg string, replyTo int) {
 		idx := -1
 		if n, err := fmt.Sscanf(arg, "%d", &idx); err == nil && n == 1 && idx >= 0 && idx < len(models) {
 			g.ag.Client.Model = models[idx]
-			config.SaveModel(models[idx])
-			send(g.bot, chatID, "✓ model: "+models[idx]+" (tersimpan)", replyTo)
+			if !once {
+				config.SaveModel(models[idx])
+			}
+			kind := "(tersimpan)"
+			if once {
+				kind = "(sesi ini)"
+			}
+			send(g.bot, chatID, "✓ model: "+models[idx]+" "+kind, replyTo)
 			return
 		}
 		for _, m := range models {
 			if m == arg {
 				g.ag.Client.Model = m
-				config.SaveModel(m)
-				send(g.bot, chatID, "✓ model: "+m+" (tersimpan)", replyTo)
+				if !once {
+					config.SaveModel(m)
+				}
+				kind := "(tersimpan)"
+				if once {
+					kind = "(sesi ini)"
+				}
+				send(g.bot, chatID, "✓ model: "+m+" "+kind, replyTo)
 				return
 			}
 		}
@@ -292,6 +304,7 @@ func (g *gw) handleModel(chatID int64, arg string, replyTo int) {
 		}
 		fmt.Fprintf(&b, "%s%d. %s\n", mark, i, m)
 	}
+	b.WriteString("\n/model <nama> --once → cuma sesi ini")
 	send(g.bot, chatID, b.String(), replyTo)
 }
 
@@ -393,6 +406,152 @@ func (g *gw) handleSkills(chatID int64, arg string, replyTo int) {
 		b.WriteString("· " + n + "\n")
 	}
 	send(g.bot, chatID, b.String(), replyTo)
+}
+
+func (g *gw) handleRetry(chatID int64, replyTo int) {
+	st, ok := g.chats[chatID]
+	if !ok || len(st.messages) == 0 {
+		send(g.bot, chatID, "belum ada percakapan untuk diulang", replyTo)
+		return
+	}
+	userText, ok := popLastUserTurn(st.messages)
+	if !ok {
+		send(g.bot, chatID, "tidak ada giliran user untuk diulang", replyTo)
+		return
+	}
+	st.messages = st.messages[:len(st.messages)-userText.removed]
+	g.runAgentTurn(chatID, st, userText.text, replyTo)
+}
+
+func (g *gw) handleUndo(chatID int64, replyTo int) {
+	st, ok := g.chats[chatID]
+	if !ok || len(st.messages) == 0 {
+		send(g.bot, chatID, "belum ada percakapan", replyTo)
+		return
+	}
+	userText, ok := popLastUserTurn(st.messages)
+	if !ok {
+		send(g.bot, chatID, "tidak ada giliran user untuk dibatalkan", replyTo)
+		return
+	}
+	st.messages = st.messages[:len(st.messages)-userText.removed]
+	send(g.bot, chatID, "✓ giliran dibatalkan ("+truncate(userText.text, 80)+")", replyTo)
+}
+
+func (g *gw) handleStatus(chatID int64, replyTo int) {
+	st, ok := g.chats[chatID]
+	msgCount := 0
+	if ok {
+		msgCount = len(st.messages)
+	}
+	var b strings.Builder
+	b.WriteString("◆ Status\n\n")
+	fmt.Fprintf(&b, "model: %s\n", g.ag.Client.Model)
+	fmt.Fprintf(&b, "pesan: %d\n", msgCount)
+	if ok {
+		fmt.Fprintf(&b, "sesi: %s\n", st.id)
+	}
+	b.WriteString("gateway: telegram polling")
+	send(g.bot, chatID, b.String(), replyTo)
+}
+
+func (g *gw) handleSessions(chatID int64, arg string, replyTo int) {
+	var list []session.Session
+	if arg != "" {
+		list = g.sess.Search(arg)
+	} else {
+		list = g.sess.List()
+	}
+	if len(list) == 0 {
+		if arg != "" {
+			send(g.bot, chatID, "tidak ada sesi cocok: "+arg, replyTo)
+		} else {
+			send(g.bot, chatID, "belum ada sesi tersimpan", replyTo)
+		}
+		return
+	}
+	var b strings.Builder
+	if arg != "" {
+		fmt.Fprintf(&b, "◆ Sesi cocok %q (%d)\n\n", arg, len(list))
+	} else {
+		b.WriteString("◆ Sesi tersimpan\n\n")
+	}
+	for i, s := range list {
+		if i >= 15 {
+			fmt.Fprintf(&b, "… dan %d sesi lagi\n", len(list)-15)
+			break
+		}
+		fmt.Fprintf(&b, "%s · %s\n", s.ID, s.Title)
+	}
+	send(g.bot, chatID, b.String(), replyTo)
+}
+
+// runAgentTurn runs the agent for a single user turn and streams the result.
+// It is shared between handle (free-form messages) and handleRetry.
+func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
+	log.Printf("[gateway] %s", text)
+	typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
+	g.bot.Send(typing)
+
+	ag := g.ag
+	ag.Messages = st.messages
+
+	live := newLive(g.bot, chatID)
+	ag.Emit = func(e agent.Event) {
+		switch e.Type {
+		case "tool_start":
+			live.push("▸ " + e.ToolName + " …")
+		case "tool_end":
+			live.push("  ✓ " + e.ToolName + " (" + e.Duration.Round(100*time.Millisecond).String() + ")")
+		case "error":
+			live.push("  ✗ " + e.Text)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	answer, err := ag.Run(ctx, text, live.text)
+	cancel()
+	ag.Emit = nil
+	st.messages = ag.Messages
+
+	if err != nil {
+		live.finish("✗ error: " + err.Error())
+		return
+	}
+	if answer == "" {
+		answer = "(done)"
+	}
+	g.saveChat(st)
+	live.finish(answer)
+}
+
+// lastUserTurn holds the text of the last user message and how many messages
+// to remove (including the user message itself) to undo/retry that turn.
+type lastUserTurn struct {
+	text    string
+	removed int
+}
+
+// popLastUserTurn finds the last user message in the slice and returns its
+// text + how many messages to truncate (the user message and everything after).
+func popLastUserTurn(msgs []llm.Message) (lastUserTurn, bool) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == llm.RoleUser {
+			text := ""
+			if s, ok := msgs[i].Content.(string); ok {
+				text = s
+			}
+			return lastUserTurn{text: text, removed: len(msgs) - i}, true
+		}
+	}
+	return lastUserTurn{}, false
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func send(bot *tgbotapi.BotAPI, chatID int64, text string, replyTo int) {

@@ -6,6 +6,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,11 +26,56 @@ type Event struct {
 	Timestamp time.Time
 }
 
-const identityPrompt = `You are Hiroto, a personal AI agent running in the user's terminal.
-You help with tasks by using tools: run shell commands, read/write files, search the web,
-and manage persistent memory. Be direct, verify your work with tools, and never invent
-tool output. When a relevant skill is listed in the index, load it with skill_view before
-acting. Respond in the user's language.`
+const identityPrompt = `You are Hiroto, a personal AI agent running in the user's terminal. You are a skilled software engineer — you write, review, debug, and deploy code using real tools. You are persistent, thorough, and self-verifying.
+
+## Execution discipline
+
+- Keep working until the task is actually complete. Do not stop with a summary of what you plan to do. If you have tools available, use them instead of telling the user what you would do.
+- After any state-changing write (file write, API call, command), verify the effect by reading back the exact result before claiming success.
+- When a tool fails, try an alternative approach before giving up. If a file edit fails to apply, re-read the file to get the current exact contents before retrying.
+- Fix root causes, not symptoms. When you find a bug, check sibling call paths for the same flaw and fix the class, not just the reported site.
+
+## Verification
+
+Before finalizing your response:
+- Correctness: does the output satisfy every stated requirement?
+- Grounding: are factual claims backed by tool outputs?
+- Completion: "done" means every named criterion is verified — never a plausible subset.
+- If context is missing, use tools to find it — never guess or hallucinate.
+
+## Coding conventions
+
+- Match the project's existing style and conventions. Touch only what the task needs — no drive-by refactors, renames, or reformatting.
+- Add any imports/dependencies your code requires.
+- Edit with targeted patches (patch tool) rather than rewriting entire files.
+- Verify with tests, linters, and builds before declaring work done.
+- Never invent files, symbols, APIs, or imports. If you haven't seen it in the repo, go look.
+
+## Context management
+
+- When a relevant skill is listed in the index, load it with skill_view before acting. Skills contain specialized knowledge and proven workflows.
+- Use @-syntax for context: @file:path injects file content, @folder:path injects directory listing, @diff injects git changes.
+- Before taking action, check whether prerequisite discovery steps are needed.
+
+## Tool usage
+
+- Read files with read_file, write with write_file, edit with patch. Use terminal for builds, tests, git, installs, and scripts.
+- Use search_files to find code by content or filename — it's faster than grep.
+- Use web_search and web_extract for documentation and research.
+- Use browser_navigate/click/type for web automation.
+- Save reusable workflows as skills with skill_manage.
+
+## Deliverable mode
+
+When the user asks for a file (report, chart, config, script), generate it and write it to disk. Report the absolute path and verify the file was written correctly.
+
+## Safety
+
+- Never read, print, or commit secrets. Leave .env and credential files alone.
+- Before running destructive commands (rm, git reset --hard, etc.), confirm scope.
+- Use auto-checkpoint via /rollback save before risky operations.
+
+Respond in the user's language. Be direct, concise, and verify with tools.`
 
 type Agent struct {
 	Client   *llm.Client
@@ -44,6 +91,9 @@ type Agent struct {
 
 	Messages []llm.Message
 	Emit     func(Event) // UI callback
+	SteerCh  chan string // injected mid-turn: read after each tool call
+	Goal     string      // standing goal across turns
+	Reasoning string     // reasoning effort level
 }
 
 // SystemPrompt assembles the Hiroto-style system prompt.
@@ -53,6 +103,19 @@ func (a *Agent) SystemPrompt() string {
 
 	if a.Workdir != "" {
 		fmt.Fprintf(&b, "\nCurrent working directory: %s\n", a.Workdir)
+		// Inject project context files (AGENTS.md, CLAUDE.md, .cursorrules, .hermes.md).
+		for _, name := range []string{"AGENTS.md", "CLAUDE.md", ".cursorrules", ".hermes.md"} {
+			path := filepath.Join(a.Workdir, name)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			content := string(data)
+			if len(content) > 4000 {
+				content = content[:4000] + "\n... (truncated)"
+			}
+			fmt.Fprintf(&b, "\n## Project context (%s)\n%s\n", name, content)
+		}
 	}
 
 	if idx := a.skillIndexBlock(); idx != "" {
@@ -71,6 +134,12 @@ func (a *Agent) SystemPrompt() string {
 	}
 	if a.MaxTurns > 0 {
 		fmt.Fprintf(&b, "\nExecution discipline: keep working until the task is complete. Use tools to verify results. Max %d tool turns per run.\n", a.MaxTurns)
+	}
+	if a.Goal != "" {
+		fmt.Fprintf(&b, "\n## Standing goal\n%s\nWork toward this goal across turns. Do not lose sight of it.\n", a.Goal)
+	}
+	if a.Reasoning != "" {
+		fmt.Fprintf(&b, "\n## Reasoning effort\nSet to %s. Use this level of reasoning depth.\n", a.Reasoning)
 	}
 	return b.String()
 }
@@ -183,6 +252,16 @@ func (a *Agent) Run(ctx context.Context, userText string, onText func(string)) (
 		// Preserve assistant message with tool calls, then execute each.
 		a.Messages = append(a.Messages, assistant)
 		for _, tc := range assistant.ToolCalls {
+			// Check for steer injection before each tool.
+			select {
+			case msg := <-a.SteerCh:
+				a.Messages = append(a.Messages, llm.Message{Role: llm.RoleUser, Content: msg})
+				a.emit(Event{Type: "error", Text: "steer: " + msg})
+				// Re-run the LLM with the steer message injected.
+				return a.continueRun(ctx, onText)
+			default:
+			}
+
 			name := tc.Function.Name
 			a.emit(Event{Type: "tool_start", ToolName: name})
 			start := time.Now()
@@ -239,4 +318,102 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// continueRun continues the agent loop without adding a new user message.
+// Used by steer injection: the steer message is already appended to Messages.
+func (a *Agent) continueRun(ctx context.Context, onText func(string)) (string, error) {
+	toolDefs := llmTools(a.Reg)
+	var final string
+
+	for turn := 0; turn < maxInt(a.MaxTurns, 1); turn++ {
+		select {
+		case <-ctx.Done():
+			return final, ctx.Err()
+		default:
+		}
+
+		var assistant llm.Message
+		var streamErr error
+		for attempt := 0; attempt <= a.RetryAttempts; attempt++ {
+			if attempt > 0 {
+				a.emit(Event{Type: "error", Text: fmt.Sprintf("retry %d/%d…", attempt, a.RetryAttempts)})
+				time.Sleep(time.Duration(attempt) * time.Second)
+			}
+			if onText != nil {
+				assistant, streamErr = a.Client.Stream(ctx, a.Messages, toolDefs, onText)
+			}
+			if streamErr != nil {
+				select {
+				case <-ctx.Done():
+					return final, ctx.Err()
+				default:
+				}
+				assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
+				if streamErr != nil {
+					if attempt < a.RetryAttempts {
+						continue
+					}
+					return final, streamErr
+				}
+				if onText != nil {
+					if s, ok := assistant.Content.(string); ok && s != "" {
+						onText(s)
+					}
+				}
+			}
+			break
+		}
+
+		if len(assistant.ToolCalls) == 0 {
+			if s, ok := assistant.Content.(string); ok {
+				final = s
+			}
+			a.Messages = append(a.Messages, assistant)
+			return final, nil
+		}
+
+		a.Messages = append(a.Messages, assistant)
+		for _, tc := range assistant.ToolCalls {
+			select {
+			case msg := <-a.SteerCh:
+				a.Messages = append(a.Messages, llm.Message{Role: llm.RoleUser, Content: msg})
+				a.emit(Event{Type: "error", Text: "steer: " + msg})
+				return a.continueRun(ctx, onText)
+			default:
+			}
+
+			name := tc.Function.Name
+			a.emit(Event{Type: "tool_start", ToolName: name})
+			start := time.Now()
+
+			var result tools.Result
+			tool, ok := a.Reg.Get(name)
+			if !ok {
+				result = tools.Result{Output: fmt.Sprintf("unknown tool %q", name), IsError: true}
+			} else {
+				result = tool.Exec(ctx, tools.JSONArgs(tc.Function.Arguments))
+			}
+			a.emit(Event{Type: "tool_end", ToolName: name, Duration: time.Since(start), Text: result.Output})
+
+			content := result.Output
+			if result.IsError {
+				content = "ERROR: " + content
+			}
+			a.Messages = append(a.Messages, llm.Message{
+				Role: llm.RoleTool, ToolCallID: tc.ID, Name: name, Content: content,
+			})
+		}
+	}
+	wrap := llm.Message{Role: llm.RoleUser, Content: "Turn budget reached. Summarize what was accomplished and what remains, without further tool calls."}
+	a.Messages = append(a.Messages, wrap)
+	msg, err := a.Client.Chat(ctx, a.Messages, nil)
+	if err != nil {
+		return final, err
+	}
+	if s, ok := msg.Content.(string); ok {
+		final = s
+	}
+	a.Messages = append(a.Messages, msg)
+	return final, nil
 }

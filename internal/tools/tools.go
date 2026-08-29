@@ -91,7 +91,7 @@ type llmFn struct {
 func RegisterBuiltin(r *Registry, opts Options) {
 	registerTerminal(r, opts)
 	registerReadFile(r)
-	registerWriteFile(r)
+	registerWriteFile(r, opts)
 	registerGlob(r)
 	registerWebSearch(r, opts)
 	registerWebExtract(r, opts)
@@ -103,7 +103,7 @@ func RegisterBuiltin(r *Registry, opts Options) {
 	registerDelegateTask(r)
 	registerCronjob(r)
 	registerNativeTools(r)
-	registerPatch(r)
+	registerPatch(r, opts)
 	registerProcess(r)
 	registerClarify(r)
 	registerVision(r, opts)
@@ -171,6 +171,14 @@ func registerTerminal(r *Registry, opts Options) {
 			cmdStr, _ := args["command"].(string)
 			if strings.TrimSpace(cmdStr) == "" {
 				return Result{Output: "empty command", IsError: true}
+			}
+			// Dangerous command detection.
+			if d := dangerousCmd(cmdStr); d != "" {
+				return Result{Output: "BLOCKED: " + d + "\n\nGunakan --force untuk tetap menjalankan: terminal(command=\"--force " + cmdStr + "\")", IsError: true}
+			}
+			// Strip --force prefix if present.
+			if strings.HasPrefix(cmdStr, "--force ") {
+				cmdStr = strings.TrimPrefix(cmdStr, "--force ")
 			}
 			wd := cwd
 			if w, ok := args["workdir"].(string); ok && w != "" {
@@ -271,10 +279,10 @@ func registerReadFile(r *Registry) {
 }
 
 // ---- write_file ----
-func registerWriteFile(r *Registry) {
+func registerWriteFile(r *Registry, opts Options) {
 	r.Register(&Tool{
 		Name:        "write_file",
-		Description: "Write content to a file, completely replacing it. Creates parent directories. Use terminal + heredoc only for appending.",
+		Description: "Write content to a file, completely replacing it. Creates parent directories. Use terminal + heredoc only for appending. After writing, runs LSP diagnostics (go vet, py_compile) on the file and reports any errors.",
 		Parameters: obj(map[string]any{
 			"path":    str("File path"),
 			"content": str("Complete file content"),
@@ -288,10 +296,15 @@ func registerWriteFile(r *Registry) {
 			if dir := filepath.Dir(path); dir != "" {
 				_ = os.MkdirAll(dir, 0o755)
 			}
+			autoCheckpoint(opts.Workdir)
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return Result{Output: err.Error(), IsError: true}
 			}
-			return Result{Output: fmt.Sprintf("wrote %s (%d bytes)", path, len(content))}
+			out := fmt.Sprintf("wrote %s (%d bytes)", path, len(content))
+			if diag := lspCheck(path); diag != "" {
+				out += "\n" + diag
+			}
+			return Result{Output: out}
 		},
 	})
 }
@@ -550,4 +563,43 @@ func registerWebFetchAlias(r *Registry) {
 			return t.Exec(ctx, map[string]any{"urls": []any{url}})
 		},
 	})
+}
+
+// dangerousCmd checks for dangerous shell commands and returns a reason if blocked.
+// The --force prefix bypasses the check.
+func dangerousCmd(cmd string) string {
+	// Strip --force prefix.
+	if strings.HasPrefix(cmd, "--force ") {
+		return ""
+	}
+	lower := strings.ToLower(cmd)
+	// Destructive file operations on root/system paths.
+	if strings.Contains(lower, "rm -rf /") || strings.Contains(lower, "rm -rf ~") ||
+		strings.Contains(lower, "rm -rf /etc") || strings.Contains(lower, "rm -rf /usr") ||
+		strings.Contains(lower, "rm -rf /var") || strings.Contains(lower, "rm -rf /home") {
+		return "perintah menghapus direktori sistem secara rekursif"
+	}
+	// Force push to main/master.
+	if strings.Contains(lower, "git push") && (strings.Contains(lower, "--force") || strings.Contains(lower, "-f")) &&
+		(strings.Contains(lower, "main") || strings.Contains(lower, "master")) {
+		return "git push --force ke branch main/master"
+	}
+	// Database drops.
+	if strings.Contains(lower, "drop database") || strings.Contains(lower, "drop table") {
+		return "perintah DROP pada database"
+	}
+	// Fork bombs and dangerous redirects.
+	if strings.Contains(lower, ":(){ :|:& };:") || strings.Contains(lower, "fork bomb") {
+		return "fork bomb terdeteksi"
+	}
+	// Overwrite critical system files.
+	if strings.Contains(lower, "dd if=") && (strings.Contains(lower, "of=/dev/sd") || strings.Contains(lower, "of=/dev/nvme")) {
+		return "dd overwrite ke disk device"
+	}
+	// chmod 777 on system dirs.
+	if strings.Contains(lower, "chmod") && strings.Contains(lower, "777") &&
+		(strings.Contains(lower, "/etc") || strings.Contains(lower, "/usr") || strings.Contains(lower, "/var") || strings.Contains(lower, "/")) {
+		return "chmod 777 pada direktori sistem"
+	}
+	return ""
 }

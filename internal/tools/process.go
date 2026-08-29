@@ -173,3 +173,21 @@ func getProc(id string) *proc {
 	defer procMu.Unlock()
 	return procMap[id]
 }
+
+// KillAll terminates every managed background process and returns the count.
+func KillAll() int {
+	procMu.Lock()
+	defer procMu.Unlock()
+	n := 0
+	for _, p := range procMap {
+		if p.Done {
+			continue
+		}
+		killProcGroup(p)
+		if p.Cmd.Process != nil {
+			_ = p.Cmd.Process.Kill()
+		}
+		n++
+	}
+	return n
+}

@@ -29,6 +29,9 @@ type Config struct {
 	Gateway struct {
 		TelegramToken string `yaml:"telegram_token"` // Bot API token (empty = off)
 	} `yaml:"gateway"`
+	API struct {
+		Port int `yaml:"port"` // API server port (default 20129)
+	} `yaml:"api"`
 	Plugins struct {
 		Dirs []string `yaml:"dirs"` // plugin directories
 	} `yaml:"plugins"`
