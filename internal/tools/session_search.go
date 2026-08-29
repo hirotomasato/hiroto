@@ -12,7 +12,7 @@ func registerSessionSearch(r *Registry, opts Options) {
 	r.Register(&Tool{
 		Name:        "session_search",
 		Description: "Search past conversation sessions by keyword. Returns matching sessions with ID, title, date, and matching message snippets.",
-		Parameters: mustJSON(`{"type":"object","properties":{"query":{"type":"string","description":"Search query (keyword or phrase)"}},"required":["query"]}`),
+		Parameters:  mustJSON(`{"type":"object","properties":{"query":{"type":"string","description":"Search query (keyword or phrase)"}},"required":["query"]}`),
 		Exec: func(ctx context.Context, args map[string]any) Result {
 			query, _ := args["query"].(string)
 			if query == "" {

@@ -11,8 +11,8 @@ func registerPatch(r *Registry) {
 	r.Register(&Tool{
 		Name:        "patch",
 		Description: "Edit a file by replacing old_string with new_string (Hiroto-style targeted patch). Finds the first exact match and replaces it. Use for precise edits without overwriting the whole file.",
-		Parameters: mustJSON(`{"type":"object","properties":{"path":{"type":"string","description":"File path to edit"},"old_string":{"type":"string","description":"Exact text to find and replace"},"new_string":{"type":"string","description":"Replacement text (use empty string to delete)"}},"required":["path","old_string","new_string"]}`),
-		Exec: patchFile,
+		Parameters:  mustJSON(`{"type":"object","properties":{"path":{"type":"string","description":"File path to edit"},"old_string":{"type":"string","description":"Exact text to find and replace"},"new_string":{"type":"string","description":"Replacement text (use empty string to delete)"}},"required":["path","old_string","new_string"]}`),
+		Exec:        patchFile,
 	})
 }
 

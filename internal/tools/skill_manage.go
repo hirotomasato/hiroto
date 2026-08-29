@@ -12,8 +12,8 @@ func registerSkillManage(r *Registry) {
 	r.Register(&Tool{
 		Name:        "skill_manage",
 		Description: "Create, edit, patch, or delete a skill (SKILL.md file). Actions: create, patch, delete. Skills are stored in ~/.hiroto/skills/<category>/<name>/SKILL.md. Use create for new skills, patch for targeted edits, delete to remove.",
-		Parameters: mustJSON(`{"type":"object","properties":{"action":{"type":"string","description":"One of: create, patch, delete"},"name":{"type":"string","description":"Skill name (lowercase, hyphens)"},"category":{"type":"string","description":"Optional category subdirectory"},"content":{"type":"string","description":"Full SKILL.md content (required for create)"},"old_string":{"type":"string","description":"Text to find (required for patch)"},"new_string":{"type":"string","description":"Replacement text (required for patch)"}},"required":["action","name"]}`),
-		Exec: skillManageExec,
+		Parameters:  mustJSON(`{"type":"object","properties":{"action":{"type":"string","description":"One of: create, patch, delete"},"name":{"type":"string","description":"Skill name (lowercase, hyphens)"},"category":{"type":"string","description":"Optional category subdirectory"},"content":{"type":"string","description":"Full SKILL.md content (required for create)"},"old_string":{"type":"string","description":"Text to find (required for patch)"},"new_string":{"type":"string","description":"Replacement text (required for patch)"}},"required":["action","name"]}`),
+		Exec:        skillManageExec,
 	})
 }
 

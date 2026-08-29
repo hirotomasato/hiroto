@@ -17,8 +17,8 @@ func registerClarify(r *Registry) {
 	r.Register(&Tool{
 		Name:        "clarify",
 		Description: "Ask the user a question when you need clarification or a decision. Use when the task is ambiguous and you need user input. Supports multiple-choice or open-ended questions.",
-		Parameters: mustJSON(`{"type":"object","properties":{"question":{"type":"string","description":"The question to ask the user"},"choices":{"type":"array","items":{"type":"string"},"description":"Optional list of choices for the user"}},"required":["question"]}`),
-		Exec: clarifyExec,
+		Parameters:  mustJSON(`{"type":"object","properties":{"question":{"type":"string","description":"The question to ask the user"},"choices":{"type":"array","items":{"type":"string"},"description":"Optional list of choices for the user"}},"required":["question"]}`),
+		Exec:        clarifyExec,
 	})
 }
 

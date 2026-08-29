@@ -21,11 +21,11 @@ const (
 )
 
 type Message struct {
-	Role       Role         `json:"role"`
-	Content    any          `json:"content,omitempty"` // string or []ContentPart
-	ToolCalls  []ToolCall   `json:"tool_calls,omitempty"`
-	ToolCallID string       `json:"tool_call_id,omitempty"`
-	Name       string       `json:"name,omitempty"`
+	Role       Role       `json:"role"`
+	Content    any        `json:"content,omitempty"` // string or []ContentPart
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Name       string     `json:"name,omitempty"`
 }
 
 type ContentPart struct {
@@ -117,9 +117,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Me
 
 // StreamDelta is one incremental piece of an assistant reply.
 type StreamDelta struct {
-	Content   string      // text chunk
-	ToolCall  *ToolCall   // complete tool call (assembled by caller)
-	Done      bool
+	Content  string    // text chunk
+	ToolCall *ToolCall // complete tool call (assembled by caller)
+	Done     bool
 }
 
 // Stream performs an SSE-streaming completion; on stream failure callers should fall back to Chat.
@@ -160,7 +160,7 @@ func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, o
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string     `json:"content"`
+					Content   string `json:"content"`
 					ToolCalls []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`

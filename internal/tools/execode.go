@@ -13,10 +13,10 @@ import (
 
 func registerExecuteCode(r *Registry) {
 	r.Register(&Tool{
-		Name: "execute_code",
+		Name:        "execute_code",
 		Description: "Run a JavaScript (Node.js) script that can call Hiroto tools via the `hiroto` global. Use hiroto.terminal(cmd), hiroto.readFile(path), hiroto.writeFile(path, content), hiroto.webSearch(query), hiroto.webFetch(url), hiroto.searchFiles(pattern), hiroto.browserFetch(url). Returns stdout. Max 60s, 50KB output.",
-		Parameters: mustJSON("{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"JavaScript code to execute. Use hiroto.toolName(args) to call tools. Print final result to stdout.\"}},\"required\":[\"code\"]}"),
-		Exec: executeCode,
+		Parameters:  mustJSON("{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"description\":\"JavaScript code to execute. Use hiroto.toolName(args) to call tools. Print final result to stdout.\"}},\"required\":[\"code\"]}"),
+		Exec:        executeCode,
 	})
 }
 

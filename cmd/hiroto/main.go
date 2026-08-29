@@ -97,8 +97,8 @@ type model struct {
 	clarifyQuestion string
 	clarifyResp     chan string
 
-	history  []string // input history
-	histIdx  int
+	history []string // input history
+	histIdx int
 }
 
 func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *session.Store) model {
@@ -154,7 +154,7 @@ func (m *model) renderAgentEvent(e agent.Event) line {
 		}
 		return line{lineTool, head + "\n" + stMuted.Render(indent(body, "    "))}
 	case "compress_start", "compress_end":
-		return line{lineInfo, stMuted.Render("⚡ "+e.Text)}
+		return line{lineInfo, stMuted.Render("⚡ " + e.Text)}
 	case "error":
 		return line{lineError, stErr.Render("✗ " + e.Text)}
 	}

@@ -21,7 +21,7 @@ type Config struct {
 		SystemExtra       string `yaml:"system_prompt_extra"`
 		TermTimeout       int    `yaml:"terminal_timeout"`
 		CompressBudget    int    `yaml:"compression_budget_tokens"` // 0 = off; default 25000
-		CompressKeepTurns int    `yaml:"compression_keep_turns"`   // default 6
+		CompressKeepTurns int    `yaml:"compression_keep_turns"`    // default 6
 	} `yaml:"agent"`
 	Skills struct {
 		Dirs []string `yaml:"dirs"` // extra skill dirs; ~/.hiroto/skills always loaded

@@ -29,8 +29,8 @@ func registerProcess(r *Registry) {
 	r.Register(&Tool{
 		Name:        "process",
 		Description: "Manage background processes: start a command, list running processes, poll output, kill, or wait for completion. Actions: start, list, poll, kill, wait.",
-		Parameters: mustJSON(`{"type":"object","properties":{"action":{"type":"string","description":"One of: start, list, poll, kill, wait"},"id":{"type":"string","description":"Process ID (required for poll/kill/wait)"},"command":{"type":"string","description":"Shell command to run (required for start)"},"timeout":{"type":"integer","description":"Max seconds to wait (for wait action, default 30)"}},"required":["action"]}`),
-		Exec: processExec,
+		Parameters:  mustJSON(`{"type":"object","properties":{"action":{"type":"string","description":"One of: start, list, poll, kill, wait"},"id":{"type":"string","description":"Process ID (required for poll/kill/wait)"},"command":{"type":"string","description":"Shell command to run (required for start)"},"timeout":{"type":"integer","description":"Max seconds to wait (for wait action, default 30)"}},"required":["action"]}`),
+		Exec:        processExec,
 	})
 }
 

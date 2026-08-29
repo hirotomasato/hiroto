@@ -13,7 +13,9 @@ import (
 func (a *Agent) CompressNow(ctx context.Context) error {
 	budget := a.CompressBudget
 	keep := a.CompressKeepTurns
-	if keep <= 0 { keep = 6 }
+	if keep <= 0 {
+		keep = 6
+	}
 	keepMsgs := keep * 2
 	msgs := a.Messages
 	if len(msgs) <= keepMsgs+2 {

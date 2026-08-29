@@ -20,9 +20,9 @@ type Manifest struct {
 	Version     string `yaml:"version"`
 	Description string `yaml:"description"`
 	Tools       []struct {
-		Name        string `yaml:"name"`
-		Description string `yaml:"description"`
-		Command     string `yaml:"command"` // e.g. "python3 script.py"
+		Name        string         `yaml:"name"`
+		Description string         `yaml:"description"`
+		Command     string         `yaml:"command"` // e.g. "python3 script.py"
 		Parameters  map[string]any `yaml:"parameters,omitempty"`
 	} `yaml:"tools"`
 }

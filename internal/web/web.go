@@ -113,7 +113,7 @@ func searchDDG(ctx context.Context, query string, limit int) ([]SearchHit, error
 }
 
 var (
-	resultRe = regexp.MustCompile(`(?s)<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>`)
+	resultRe  = regexp.MustCompile(`(?s)<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.*?)</a>`)
 	snippetRe = regexp.MustCompile(`(?s)<a class="result__snippet"[^>]*>(.*?)</a>`)
 	tagRe     = regexp.MustCompile(`<[^>]+>`)
 )

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 — 2026-08-29
+
+- Fix `.gitignore` silently dropping `cmd/hiroto/` — the tagged module now ships the full source and `go install ...@latest` works again
+- Banner polish: tighter layout, higher contrast
+
 ## 0.4.1 — 2026-08-29
 
 - First tagged GitHub Release (`/releases/latest` for `hiroto --update`)

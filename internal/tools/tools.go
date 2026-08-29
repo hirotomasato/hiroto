@@ -17,7 +17,7 @@ import (
 
 // Result of a tool execution.
 type Result struct {
-	Output string
+	Output  string
 	IsError bool
 }
 
@@ -35,7 +35,7 @@ type Tool struct {
 func obj(props map[string]any, required ...string) map[string]any {
 	return map[string]any{"type": "object", "properties": props, "required": required}
 }
-func str(desc string) map[string]any  { return map[string]any{"type": "string", "description": desc} }
+func str(desc string) map[string]any   { return map[string]any{"type": "string", "description": desc} }
 func boolp(desc string) map[string]any { return map[string]any{"type": "boolean", "description": desc} }
 
 // Registry holds all available tools.
@@ -160,7 +160,7 @@ type SkillIndex interface {
 func registerTerminal(r *Registry, opts Options) {
 	cwd := opts.Workdir
 	r.Register(&Tool{
-		Name: "terminal",
+		Name:        "terminal",
 		Description: "Execute a shell command on the local machine. Working directory persists between calls. Use for builds, installs, git, processes, scripts, network. Do NOT use for reading single files (use read_file).",
 		Parameters: obj(map[string]any{
 			"command": str("The shell command to execute"),
