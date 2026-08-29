@@ -19,3 +19,9 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
