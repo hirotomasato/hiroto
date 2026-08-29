@@ -38,6 +38,15 @@ func (ts *TodoStore) Save(items []TodoItem) {
 	}
 }
 
+// Reload re-reads the checklist from disk. The TUI panel uses this to pick up
+// writes made by the todo tool (which runs against a separate store instance).
+func (ts *TodoStore) Reload() {
+	ts.Items = nil
+	if data, err := os.ReadFile(ts.Path); err == nil {
+		_ = json.Unmarshal(data, &ts.Items)
+	}
+}
+
 // Render draws the checklist, priority order preserved.
 func (ts *TodoStore) Render() string {
 	if len(ts.Items) == 0 {

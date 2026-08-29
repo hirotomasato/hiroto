@@ -46,6 +46,9 @@ var (
 	cErr      = lipgloss.Color("#E06C60")
 	cBgFaint  = lipgloss.Color("#3A3630")
 	cBackdrop = lipgloss.Color("#141210")
+	cDiffAdd  = lipgloss.Color("#8FBF7F") // green — added lines
+	cDiffDel  = lipgloss.Color("#E06C60") // red — removed lines
+	cDiffHunk = lipgloss.Color("#7FB4E8") // blue — @@ hunk headers
 
 	stBanner  = lipgloss.NewStyle().Bold(true).Foreground(cPrimary)
 	stUserTag = lipgloss.NewStyle().Bold(true).Foreground(cUser)
@@ -55,6 +58,10 @@ var (
 	stErr     = lipgloss.NewStyle().Foreground(cErr)
 	stInput   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBgFaint).Padding(0, 1)
 	stHelp    = lipgloss.NewStyle().Foreground(cMuted)
+
+	stDiffAdd  = lipgloss.NewStyle().Foreground(cDiffAdd)
+	stDiffDel  = lipgloss.NewStyle().Foreground(cDiffDel)
+	stDiffHunk = lipgloss.NewStyle().Foreground(cDiffHunk)
 
 	// Flash card (floating error/info popup — Hermes-style).
 	stFlashErr  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cErr).Padding(0, 1).Foreground(cErr)
@@ -113,11 +120,12 @@ type model struct {
 	streaming bool // true when assistant is writing text (vs thinking or running tools)
 	verbose   int  // 0=compact, 1=full (tool output verbosity)
 	steerCh   chan string
-	goal      string // standing goal across turns
-	reasoning string // reasoning effort level
-	flash     string // temporary flash message (error/warning card)
-	flashKind string // "error" or "info"
-	rendered  bool   // track first render for GotoTop
+	goal      string           // standing goal across turns
+	reasoning string           // reasoning effort level
+	todos     *tools.TodoStore // shared checklist — rendered as a live panel
+	flash     string           // temporary flash message (error/warning card)
+	flashKind string           // "error" or "info"
+	rendered  bool             // track first render for GotoTop
 
 	// Command picker (slash suggestions).
 	cmdPicker struct {
@@ -143,7 +151,7 @@ func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *se
 	ta.SetHeight(2)
 	ta.Focus()
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle().Foreground(cPrimary)))
-	m := model{cfg: cfg, ag: ag, mem: mem, sessStore: ss, sessID: newSessionID(), input: ta, spinner: sp, histIdx: -1, startedAt: time.Now()}
+	m := model{cfg: cfg, ag: ag, mem: mem, sessStore: ss, sessID: newSessionID(), input: ta, spinner: sp, histIdx: -1, startedAt: time.Now(), todos: tools.NewTodoStore()}
 	m.vp = viewport.New(80, 20)
 	m.vp.KeyMap = viewport.KeyMap{} // disable default pager keys — we handle scrolling ourselves
 	m.vp.SetContent("")
@@ -183,17 +191,12 @@ func (m *model) renderAgentEvent(e agent.Event) line {
 	case "tool_end":
 		head := stToolTag.Render("✓ "+toolActivity(e.ToolName, e.ToolArgs)) + stMuted.Render(fmt.Sprintf(" (%.1fs)", e.Duration.Seconds()))
 		body := e.Text
-		// Verbose: 0=compact (first few lines), 1=full, 2=log (all)
-		if m.verbose == 0 {
-			lines := strings.Split(body, "\n")
-			if len(lines) > 3 {
-				body = strings.Join(lines[:3], "\n") + "\n…"
-			}
+		// Diff-bearing output (patch/write_file) is colorized and shown in
+		// full up to a cap — never compacted, since the diff IS the signal.
+		if hasDiff(body) {
+			return line{lineTool, head + "\n" + indent(colorizeDiff(body), "  ")}
 		}
-		if len(body) > 300 {
-			body = body[:300] + "…"
-		}
-		return line{lineTool, head + "\n" + stMuted.Render(indent(body, "    "))}
+		return line{lineTool, head + "\n" + m.renderToolBody(body)}
 	case "compress_start", "compress_end":
 		return line{lineInfo, stMuted.Render("⚡ " + e.Text)}
 	case "error":
@@ -204,6 +207,78 @@ func (m *model) renderAgentEvent(e agent.Event) line {
 
 func indent(s, pad string) string {
 	return pad + strings.ReplaceAll(s, "\n", "\n"+pad)
+}
+
+// renderToolBody formats non-diff tool output with a line/char budget keyed to
+// the verbose level, and a "… (+N lines, M chars hidden)" footer so the user
+// knows there's more (toggle full view with /verbose):
+//
+//	verbose 0 (compact): 6 lines / 500 chars
+//	verbose 1 (full):    40 lines / 4000 chars
+//	verbose 2 (log):     everything
+func (m *model) renderToolBody(body string) string {
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		return ""
+	}
+	maxLines, maxChars := 6, 500
+	switch m.verbose {
+	case 1:
+		maxLines, maxChars = 40, 4000
+	case 2:
+		maxLines, maxChars = 1<<30, 1<<30
+	}
+	lines := strings.Split(body, "\n")
+	hiddenLines := 0
+	if len(lines) > maxLines {
+		hiddenLines = len(lines) - maxLines
+		lines = lines[:maxLines]
+	}
+	shown := strings.Join(lines, "\n")
+	hiddenChars := 0
+	if len(shown) > maxChars {
+		hiddenChars = len(shown) - maxChars
+		shown = shown[:maxChars]
+	}
+	out := stMuted.Render(indent(shown, "    "))
+	if hiddenLines > 0 || hiddenChars > 0 {
+		var parts []string
+		if hiddenLines > 0 {
+			parts = append(parts, fmt.Sprintf("+%d lines", hiddenLines))
+		}
+		if hiddenChars > 0 {
+			parts = append(parts, fmt.Sprintf("%d chars", hiddenChars))
+		}
+		out += "\n" + stHelp.Render(fmt.Sprintf("    … (%s hidden — /verbose)", strings.Join(parts, ", ")))
+	}
+	return out
+}
+
+// hasDiff reports whether a tool output contains a unified-diff hunk.
+func hasDiff(s string) bool {
+	return strings.Contains(s, "\n@@ ") || strings.HasPrefix(s, "@@ ")
+}
+
+// colorizeDiff paints +/- / @@ lines of a unified diff. Non-diff preamble
+// (e.g. "patched foo.go (12 lines, 1 replacement)") stays muted.
+func colorizeDiff(s string) string {
+	var b strings.Builder
+	for i, ln := range strings.Split(s, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		switch {
+		case strings.HasPrefix(ln, "@@"):
+			b.WriteString(stDiffHunk.Render(ln))
+		case strings.HasPrefix(ln, "+"):
+			b.WriteString(stDiffAdd.Render(ln))
+		case strings.HasPrefix(ln, "-"):
+			b.WriteString(stDiffDel.Render(ln))
+		default:
+			b.WriteString(stMuted.Render(ln))
+		}
+	}
+	return b.String()
 }
 
 // toolActivity turns a tool call into a short, natural activity phrase —
@@ -317,6 +392,63 @@ func join(verb, detail string) string {
 	return verb + " " + detail
 }
 
+// renderTodoPanel draws a compact live checklist above the input, reflecting
+// the agent's current task list. Reloads from disk each render so writes made
+// by the todo tool (a separate store instance) show up immediately. Returns ""
+// when there are no tasks, so the panel takes no space until the agent plans.
+func (m *model) renderTodoPanel() string {
+	if m.todos == nil {
+		return ""
+	}
+	m.todos.Reload()
+	items := m.todos.Items
+	if len(items) == 0 {
+		return ""
+	}
+	done := 0
+	for _, it := range items {
+		if it.Status == "completed" || it.Status == "cancelled" {
+			done++
+		}
+	}
+	// Cap visible rows so a long list can't eat the whole screen.
+	const maxRows = 8
+	shown := items
+	extra := 0
+	if len(items) > maxRows {
+		shown = items[:maxRows]
+		extra = len(items) - maxRows
+	}
+	var b strings.Builder
+	b.WriteString(stDiffHunk.Render(fmt.Sprintf("Tasks %d/%d", done, len(items))) + "\n")
+	for _, it := range shown {
+		var mark, txt string
+		switch it.Status {
+		case "completed":
+			mark = stDiffAdd.Render("✔")
+			txt = stMuted.Render(it.Content)
+		case "in_progress":
+			mark = stBanner.Render("▶")
+			txt = stBanner.Render(it.Content)
+		case "cancelled":
+			mark = stErr.Render("✗")
+			txt = stMuted.Render(it.Content)
+		default:
+			mark = stMuted.Render("○")
+			txt = stHelp.Render(it.Content)
+		}
+		b.WriteString("  " + mark + " " + txt + "\n")
+	}
+	if extra > 0 {
+		b.WriteString(stHelp.Render(fmt.Sprintf("  … +%d more", extra)) + "\n")
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cBgFaint).
+		Padding(0, 1).
+		Render(strings.TrimRight(b.String(), "\n"))
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -352,12 +484,28 @@ var (
 	chMu     sync.Mutex
 	streamCh = make(chan tea.Msg, 256)
 	mdRender *glamour.TermRenderer
+	mdWidth  int
 )
 
-func mdRenderer() *glamour.TermRenderer {
-	if mdRender == nil {
-		r, _ := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(0))
+// mdRenderer returns a markdown renderer for the given wrap width. Uses the
+// "dark" style explicitly (not WithAutoStyle) so code blocks get chroma syntax
+// highlighting even when TTY detection is unreliable under the altscreen.
+// Re-created when the width changes so long lines wrap to the viewport.
+func mdRendererW(width int) *glamour.TermRenderer {
+	if width < 20 {
+		width = 80
+	}
+	if mdRender == nil || mdWidth != width {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			// Fallback: no-wrap auto style — never nil.
+			r, _ = glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(0))
+		}
 		mdRender = r
+		mdWidth = width
 	}
 	return mdRender
 }
@@ -386,18 +534,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.vp.Width = msg.Width
-		// Clamp: a height < 8 (tiny terminal, or size reported before PTY
-		// init) would make vp.Height negative and panic in GotoBottom.
-		h := msg.Height - 7
-		if h < 1 {
-			h = 1
-		}
-		m.vp.Height = h
 		if msg.Width >= 4 {
 			m.input.SetWidth(msg.Width - 4)
 		} else {
 			m.input.SetWidth(msg.Width)
 		}
+		m.recalcViewport()
 		m.refresh()
 
 	case tea.MouseMsg:
@@ -1010,6 +1152,24 @@ func (m *model) endAssistantLine() {
 	m.lines = append(m.lines, line{lineInfo, ""})
 }
 
+// recalcViewport sizes the transcript viewport to leave room for the input,
+// status/help bars, and the live todo panel (which grows/shrinks with tasks).
+func (m *model) recalcViewport() {
+	if m.height == 0 {
+		return
+	}
+	// chrome: input(3 with border) + status(1) + help(1) + clarify/flash slack(2)
+	chrome := 7
+	if panel := m.renderTodoPanel(); panel != "" {
+		chrome += lipgloss.Height(panel)
+	}
+	h := m.height - chrome
+	if h < 1 {
+		h = 1
+	}
+	m.vp.Height = h
+}
+
 func (m *model) refresh() {
 	var b strings.Builder
 	for _, ln := range m.lines {
@@ -1026,8 +1186,8 @@ func (m *model) refresh() {
 			// Render markdown on the RAW body only: never feed styled text
 			// (embedded ANSI) through glamour — its writer can split escape
 			// sequences and leak fragments like [1;38;2;…m as literal text.
-			if rendered, err := mdRenderer().Render(text); err == nil {
-				text = rendered
+			if rendered, err := mdRendererW(m.width - 2).Render(text); err == nil {
+				text = strings.TrimRight(rendered, "\n")
 			}
 			text = stAsstTag.Render("hiroto ◆ ") + text
 		}
@@ -1042,6 +1202,7 @@ func (m *model) refresh() {
 		content += stMuted.Render(m.spinner.View() + " " + label)
 	}
 	atBottom := m.vp.AtBottom()
+	m.recalcViewport()
 	m.vp.SetContent(content)
 	// On first render (viewport height 20), scroll to top so banner is visible.
 	if !m.rendered {
@@ -1095,6 +1256,7 @@ func (m model) View() string {
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		m.vp.View(),
+		m.renderTodoPanel(),
 		clarifyBar,
 		flashBar,
 		stInput.Render(m.input.View()),
@@ -1257,7 +1419,8 @@ func main() {
 	tools.ClarifyChan = make(chan tools.ClarifyRequest, 1)
 
 	setWindowTitle()
-	p := tea.NewProgram(initialModel(cfg, ag, mem, ss), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	m := initialModel(cfg, ag, mem, ss)
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "hiroto:", err)
 		os.Exit(1)
