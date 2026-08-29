@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -61,8 +62,10 @@ func processStart(args map[string]any) Result {
 	procMu.Lock()
 	procNextID++
 	id := fmt.Sprintf("proc_%d", procNextID)
-	cmd := exec.Command("bash", "-c", cmdStr)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd := exec.Command(shellCmd(), shellFlag(), cmdStr)
+	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	var outBuf strings.Builder
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &outBuf
@@ -134,9 +137,10 @@ func processKill(args map[string]any) Result {
 	if p.Done {
 		return Result{Output: id + " already finished"}
 	}
-	if err := syscall.Kill(-p.Cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		_ = p.Cmd.Process.Kill()
+	if runtime.GOOS != "windows" {
+		_ = syscall.Kill(-p.Cmd.Process.Pid, syscall.SIGKILL)
 	}
+	_ = p.Cmd.Process.Kill()
 	return Result{Output: id + " killed"}
 }
 

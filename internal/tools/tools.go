@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -181,7 +182,7 @@ func registerTerminal(r *Registry, opts Options) {
 			}
 			cctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			cmd := exec.CommandContext(cctx, "bash", "-c", cmdStr)
+			cmd := exec.CommandContext(cctx, shellCmd(), shellFlag(), cmdStr)
 			cmd.Dir = wd
 			out, err := cmd.CombinedOutput()
 			res := string(out)
@@ -205,6 +206,22 @@ func exitCode(err error) int {
 		return ee.ExitCode()
 	}
 	return -1
+}
+
+// shellCmd returns the shell to use based on OS.
+func shellCmd() string {
+	if runtime.GOOS == "windows" {
+		return "cmd"
+	}
+	return "bash"
+}
+
+// shellFlag returns the flag to pass a command to the shell.
+func shellFlag() string {
+	if runtime.GOOS == "windows" {
+		return "/c"
+	}
+	return "-c"
 }
 
 // ---- read_file ----

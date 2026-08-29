@@ -183,7 +183,7 @@ func smartPipeExec(ctx context.Context, args map[string]any) Result {
 	}
 	// Chain commands with pipes
 	pipeline := strings.Join(cmds, " | ")
-	cmd := exec.CommandContext(ctx, "bash", "-c", pipeline)
+	cmd := exec.CommandContext(ctx, shellCmd(), shellFlag(), pipeline)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Result{Output: fmt.Sprintf("pipeline error: %v\n%s", err, string(out)), IsError: true}
