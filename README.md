@@ -34,20 +34,26 @@ Hiroto is a personal AI agent that lives in your terminal. Built in Go with a mo
 ### Prerequisites
 
 - **Go 1.23+**
-- **Node.js** (for `execute_code` JS runtime)
-- **Python 3** (for `execute_python` runtime)
+- **Node.js** (for `execute_code`)
+- **Python 3** (for `execute_python`)
 - **Google Chrome** (for `browser_*` tools)
-- **LLM endpoint** — any OpenAI-compatible API (local proxy, Ollama, vLLM, etc.)
+- **LLM endpoint** — any OpenAI-compatible API
 
 ### Install
 
 ```bash
-git clone https://github.com/hirotomasato/hiroto.git
-cd hiroto
-go build -o ~/.local/bin/hiroto ./cmd/hiroto
+curl -fsSL https://raw.githubusercontent.com/hirotomasato/hiroto/main/install.sh | bash
 ```
 
-### Configure
+This installs Hiroto, 10+ security tools, 234 skills, and sets up your config — all automatically.
+
+Or manually:
+
+```bash
+git clone https://github.com/hirotomasato/hiroto.git
+cd hiroto
+make install
+```
 
 ```bash
 mkdir -p ~/.hiroto
@@ -129,24 +135,12 @@ hiroto gateway          # Start Telegram bot
 
 ---
 
-## External Security Tools
+## External Tools
 
-Install these for full cybersecurity capability:
+All security tools are installed automatically by `install.sh`. No manual setup needed.
+They live in `~/go/bin/` (add to PATH if not already).
 
-```bash
-go install github.com/projectdiscovery/httpx/cmd/httpx@latest
-go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-go install github.com/projectdiscovery/katana/cmd/katana@latest
-go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest
-go install github.com/lc/gau/v2/cmd/gau@latest
-go install github.com/owasp-amass/amass/v4/...@master
-go install github.com/ffuf/ffuf/v2@latest
-go install github.com/tomnomnom/waybackurls@latest
-go install github.com/hakluke/hakrawler@latest
-go install github.com/OJ/gobuster/v3@latest
-pip install sqlmap strix --break-system-packages
-```
+Includes: httpx, subfinder, katana, nuclei, dnsx, gau, ffuf, waybackurls, hakrawler, gobuster, sqlmap, strix, amass.
 
 ---
 
