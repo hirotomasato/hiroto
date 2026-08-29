@@ -132,7 +132,7 @@ func (m *model) banner() {
 	if w == 0 {
 		w = 80
 	}
-	for _, ln := range bannerLines(w, m.cfg.Model.Name+" @ "+m.cfg.Model.BaseURL, len(m.ag.Skills)) {
+	for _, ln := range bannerLines(w, m.cfg.Model.Name, len(m.ag.Skills)) {
 		m.lines = append(m.lines, line{lineInfo, ln})
 	}
 	// Check for updates on startup
@@ -234,8 +234,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.vp.Width = msg.Width
-		m.vp.Height = msg.Height - 7
-		m.input.SetWidth(msg.Width - 4)
+		// Clamp: a height < 8 (tiny terminal, or size reported before PTY
+		// init) would make vp.Height negative and panic in GotoBottom.
+		h := msg.Height - 7
+		if h < 1 {
+			h = 1
+		}
+		m.vp.Height = h
+		if msg.Width >= 4 {
+			m.input.SetWidth(msg.Width - 4)
+		} else {
+			m.input.SetWidth(msg.Width)
+		}
 		m.refresh()
 
 	case tea.KeyMsg:
@@ -254,6 +264,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refresh()
 				return m, nil
 			}
+			// Persist before quitting so --resume captures the last turn.
+			m.saveSession()
 			collectExitSummary(&m)
 			return m, tea.Quit
 		case tea.KeyCtrlP:
@@ -385,6 +397,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				line{lineInfo, stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /todo /quit")},
 			)
 		case "/quit", "/exit":
+			m.saveSession()
 			collectExitSummary(m)
 			return m, tea.Quit
 		case "/new":
@@ -589,7 +602,7 @@ func main() {
 			fmt.Sscanf(os.Args[2], "%d", &w)
 		}
 		skillList := skills.Discover(cfg.Skills.Dirs)
-		for _, ln := range bannerLines(w, cfg.Model.Name+" @ "+cfg.Model.BaseURL, len(skillList)) {
+		for _, ln := range bannerLines(w, cfg.Model.Name, len(skillList)) {
 			fmt.Println(ln)
 		}
 		return

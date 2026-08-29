@@ -90,12 +90,6 @@ func gradient(lines []string) []string {
 // bannerLines returns the full startup banner (big word + tagline + credits).
 // Falls back to a compact one-liner on narrow terminals.
 func bannerLines(width int, modelInfo string, skillCount int) []string {
-	var out []string
-	if width >= 60 {
-		out = append(out, gradient(bannerRows("HIROTO"))...)
-	} else {
-		out = append(out, stChip.Render("HR")+" "+stBanner.Render("HIROTO"))
-	}
 	ruleW := width
 	if ruleW > 56 {
 		ruleW = 56
@@ -103,9 +97,18 @@ func bannerLines(width int, modelInfo string, skillCount int) []string {
 	if ruleW < 24 {
 		ruleW = 24
 	}
+	rule := stRule.Render(strings.Repeat("─", ruleW))
+
+	var out []string
+	out = append(out, rule) // top rule, mirrors the bottom one
+	if width >= 60 {
+		out = append(out, gradient(bannerRows("HIROTO"))...)
+	} else {
+		out = append(out, stChip.Render("HR")+" "+stBanner.Render("HIROTO"))
+	}
 	out = append(out,
 		stTagline.Render("personal agent · go core · cyberteam"),
-		stRule.Render(strings.Repeat("─", ruleW)),
+		rule,
 		stMuted.Render("v"+version+" · "+devCredit+" · "+modelInfo+fmt.Sprintf(" · skills: %d", skillCount)),
 		"",
 	)
