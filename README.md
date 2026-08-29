@@ -1,53 +1,33 @@
 # Hiroto
 
-> Personal AI agent — terminal-native, Go-powered, cybersecurity-ready.
+> AI agent yang tinggal di terminal kamu. Tulis kode, scan bug, otomatisasi workflow — semua dari command line.
 
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
 [![Version](https://img.shields.io/github/v/release/hirotomasato/hiroto?color=blue)](https://github.com/hirotomasato/hiroto/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hirotomasato/hiroto/ci.yml?branch=main)](https://github.com/hirotomasato/hiroto/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Lines](https://img.shields.io/badge/lines-5.0k-orange)](https://github.com/hirotomasato/hiroto)
-[![Skills](https://img.shields.io/badge/skills-234-purple)](https://github.com/hirotomasato/hiroto)
-
-Hiroto is a personal AI agent that lives in your terminal. Built in Go with a modern TUI, it connects to any OpenAI-compatible LLM and gives you 32 built-in tools — from running shell commands to full browser automation, from Python/JS execution to cybersecurity reconnaissance.
 
 ---
 
-## Features
+## Apa ini
 
-- **Modern TUI** — Bubble Tea interface with gradient banner, status bar, markdown rendering, and auto-suggest
-- **32 built-in tools** — terminal, file ops, web, browser CDP, code execution, security scanning, process management, and more
-- **234 skills** — cybersecurity, devops, and general-purpose knowledge base
-- **One-shot mode** — `hiroto -q "question"` for scripts and automation
-- **Session persistence** — auto-save and resume conversations
-- **Model picker** — live model list from your endpoint, switch on the fly
-- **Context compression** — auto-summarize long conversations
-- **Plugin system** — load external tools from `~/.hiroto/plugins/`
-- **MCP support** — connect to Model Context Protocol servers
-- **Telegram gateway** — run as a Telegram bot
-- **13 external security tools** — httpx, nuclei, subfinder, katana, sqlmap, and more
+Hiroto adalah agen AI yang jalan di terminal. Bukan chatbot biasa — dia bisa jalanin shell command, buka browser, scan kode, cari bug, bikin laporan, dan nyambung ke Telegram. Semua dari keyboard.
+
+Ditulis dari nol pake Go. Ga ada dependency Python buat core-nya. Binary 24MB, jalan di Linux, Mac, dan ARM.
 
 ---
 
-## Quick Start
+## Install
 
-### Prerequisites
-
-- **Go 1.23+**
-- **Node.js** (for `execute_code`)
-- **Python 3** (for `execute_python`)
-- **Google Chrome** (for `browser_*` tools)
-- **LLM endpoint** — any OpenAI-compatible API
-
-### Install
+Satu command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hirotomasato/hiroto/main/install.sh | bash
 ```
 
-This installs Hiroto, 10+ security tools, 234 skills, and sets up your config — all automatically.
+Itu install Hiroto, 10+ security tools, 240 skills, dan bikin config — otomatis. Butuh Go 1.23+, Node.js, Python 3, sama Chrome.
 
-Or manually:
+Atau clone manual:
 
 ```bash
 git clone https://github.com/hirotomasato/hiroto.git
@@ -55,181 +35,103 @@ cd hiroto
 make install
 ```
 
-```bash
-mkdir -p ~/.hiroto
-```
+Config ada di `~/.hiroto/config.yaml`. API key di `~/.hiroto/.env`.
 
-Create `~/.hiroto/config.yaml`:
+---
 
-```yaml
-model:
-  base_url: http://localhost:20128/v1
-  model: your-model-name
-  api_key: ${HIROTO_API_KEY}
-
-agent:
-  max_turns: 40
-  terminal_timeout: 180
-  compression_budget_tokens: 25000
-  compression_keep_turns: 6
-```
-
-Create `~/.hiroto/.env`:
+## Cara pakai
 
 ```bash
-HIROTO_API_KEY=your-api-key
+hiroto                  # TUI interaktif
+hiroto -q "siapa aku?"  # One-shot, langsung jawab
+hiroto gateway          # Jalanin Telegram bot
+hiroto --update         # Cek update
 ```
 
-### Run
+Di TUI, semua dari keyboard:
 
-```bash
-hiroto                  # Interactive TUI
-hiroto -q "your query"  # One-shot mode
-hiroto --banner         # Show banner
-hiroto --models         # Interactive model picker
-hiroto --set-model NAME # Switch model
-hiroto gateway          # Start Telegram bot
+| Tombol | Buat apa |
+|--------|----------|
+| `Enter` | Kirim pesan |
+| `Ctrl+P` | Ganti model |
+| `Ctrl+R` | Lanjutin sesi lama |
+| `Ctrl+L` | Bersihin layar |
+| `Ctrl+S` | Simpan sesi |
+| `Ctrl+C` | Batal / keluar |
+| `PgUp` `PgDn` | Scroll naik-turun |
+
+Slash commands: `/help /new /resume /compress /update /upgrade /model /memory /todo /quit`
+
+---
+
+## Yang bisa dia lakuin
+
+**Terminal & file:** jalanin shell command, baca/tulis/edit file, background process, pipe chaining.
+
+**Browser:** buka halaman, klik, ketik, ambil teks, screenshot. Full session Chrome headless. Bisa login, isi form, scrape.
+
+**Kode:** jalanin JavaScript (Node) atau Python langsung dari chat. Script bisa panggil balik tool Hiroto.
+
+**Security:** scan secret, cari pengetahuan dari 240 skill (recon, exploit, reporting), merge laporan, aggregate findings.
+
+**Data:** web search, ekstrak konten halaman, cari di sesi lama, baca gambar.
+
+**Otomatisasi:** cronjob buat tugas berulang, delegate task ke sub-agent, Telegram bot gateway.
+
+---
+
+## Tools bawaan
+
+```
+terminal    read_file    write_file    patch    search_files
+web_search  web_extract  web_fetch
+browser_start  browser_navigate  browser_click  browser_type
+browser_exec   browser_screenshot_cdp  browser_stop
+browser_fetch  browser_screenshot
+execute_code   execute_python
+secret_scan    search_knowledge   aggregate_reports   smart_pipe
+process        delegate_task      cronjob
+memory         todo               skill_view          skill_manage
+session_search  vision_analyze    clarify
 ```
 
 ---
 
-## TUI Shortcuts
+## Skills
 
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message |
-| `Alt+Enter` | New line |
-| `Ctrl+P` | Model picker |
-| `Ctrl+R` | Resume session |
-| `Ctrl+S` | Save session |
-| `Ctrl+L` | Clear screen |
-| `Ctrl+C` | Cancel / Quit |
-| `↑` `↓` | Input history |
-| `PgUp` `PgDn` | Scroll chat |
-| `Home` `End` | Top / Bottom |
-
-### Slash Commands
+240 skill siap pakai. Tinggal sebut nama skill-nya, agent bakal load dan jalanin.
 
 ```
-/help   /new   /resume   /compress   /skills
-/model  /memory add  /memory del  /todo  /quit
+recon     → subfinder + dnsx + httpx
+hunt-xss  → 174 pola bug bounty XSS
+hunt-sqli → SQL injection hunting
+antislop  → filter anti AI-slop buat output
+...dan 236 lainnya
 ```
 
 ---
 
-## Built-in Tools (32)
+## Kenapa Go
 
-| Category | Tools |
-|----------|-------|
-| **Shell** | `terminal`, `process` (background), `smart_pipe` (chain) |
-| **Files** | `read_file`, `write_file`, `patch` (targeted edit), `search_files` |
-| **Web** | `web_search`, `web_extract`, `web_fetch` |
-| **Browser** | `browser_start`, `browser_navigate`, `browser_click`, `browser_type`, `browser_exec`, `browser_screenshot_cdp`, `browser_stop`, `browser_fetch`, `browser_screenshot` |
-| **Code** | `execute_code` (JS/Node), `execute_python` |
-| **Security** | `secret_scan`, `search_knowledge`, `aggregate_reports` |
-| **Memory** | `memory` (persistent), `todo` |
-| **Skills** | `skill_view`, `skill_manage` (create/edit/delete) |
-| **Session** | `session_search` |
-| **Vision** | `vision_analyze` (image to LLM) |
-| **Agent** | `clarify` (ask user), `delegate_task` (sub-agent), `cronjob` (schedule) |
-
----
-
-## External Tools
-
-All security tools are installed automatically by `install.sh`. No manual setup needed.
-They live in `~/go/bin/` (add to PATH if not already).
-
-Includes: httpx, subfinder, katana, nuclei, dnsx, gau, ffuf, waybackurls, hakrawler, gobuster, sqlmap, strix, amass.
-
----
-
-## Project Structure
-
-```
-hiroto/
-├── cmd/hiroto/           # Entry point: TUI, one-shot, gateway, CLI
-│   ├── main.go           # Wiring, UI, update loop
-│   ├── banner.go         # Gradient banner + branding
-│   ├── picker.go         # List picker overlay (model, session)
-│   └── sessions.go       # Session glue: save, load, resume
-├── internal/
-│   ├── agent/            # Agent loop, system prompt, compression
-│   ├── llm/              # OpenAI-compatible client (stream + non-stream)
-│   ├── tools/            # 32 tool implementations + registry
-│   ├── skills/           # SKILL.md discovery + frontmatter parser
-│   ├── memory/           # Persistent memory store (JSON)
-│   ├── session/          # Conversation persistence (JSON)
-│   ├── config/           # YAML config + .env resolver
-│   ├── web/              # Web search (Bing RSS) + extract
-│   ├── plugin/           # Plugin loader + MCP client
-│   └── gateway/          # Telegram bot
-├── go.mod
-├── go.sum
-├── README.md
-└── LICENSE
-```
-
----
-
-## Data Directory
-
-```
-~/.hiroto/
-├── config.yaml           # Settings
-├── .env                  # Secrets (API keys)
-├── skills/               # 234 skill files (cybersecurity, devops)
-├── memory/               # user.json + memory.json
-├── sessions/             # Saved conversations
-├── plugins/              # External plugins
-└── todo.json             # Agent checklist
-```
-
----
-
-## Skill Example
-
-Skills are markdown files with YAML frontmatter. They define workflows the agent can follow:
-
-```markdown
----
-name: recon
-description: Subdomain enumeration, DNS resolution, and HTTP probing for bug bounty targets.
----
-
-# Recon Skill
-
-1. Discover subdomains: `subfinder -d <target>`
-2. Resolve DNS: `dnsx -l subs.txt`
-3. Probe HTTP: `httpx -l resolved.txt`
-```
-
-The agent loads skills automatically and uses them when relevant.
+Binary 24MB, ga perlu runtime, ga perlu venv, ga perlu Docker. Build sekali, jalan di mana aja. Cross-compile ke Linux/Mac/ARM dari laptop.
 
 ---
 
 ## Development
 
 ```bash
-# Build
-go build -o hiroto ./cmd/hiroto
-
-# Run tests
-go test ./...
-
-# Vet
-go vet ./...
-
-# Install locally
-go build -o ~/.local/bin/hiroto ./cmd/hiroto
+make build    # go build
+make test     # go test ./...
+make vet      # go vet ./...
+make install  # install ke ~/.local/bin
 ```
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — [LICENSE](LICENSE)
 
 ---
 
-> **hirotomasato/hiroto** — personal AI agent, built from scratch in Go.
+Dibuat dari nol di Go. Ga ada dependency framework AI apa pun. Binary 24MB, 240 skills, 32 tools.
