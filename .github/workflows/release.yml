@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
 
+# A GitHub Release (not the tag zip) is what /releases/latest and
+# `hiroto --update` look at. Source zip/tarball is attached automatically.
+# Prebuilt binaries are optional: install.sh uses `go install @latest`.
 jobs:
   github-release:
     runs-on: ubuntu-latest
@@ -16,20 +19,3 @@ jobs:
         with:
           name: Hiroto ${{ github.ref_name }}
           generate_release_notes: true
-
-  linux-binary:
-    needs: github-release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      - name: Build
-        env:
-          GOTOOLCHAIN: auto
-        run: go build -o hiroto-linux-amd64 ./cmd/hiroto
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: hiroto-linux-amd64
