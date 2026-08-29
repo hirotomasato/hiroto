@@ -77,7 +77,19 @@ func Load() *Config {
 
 // APIKey resolves ${ENV} references in config against the environment and ~/.hiroto/.env.
 func (c *Config) APIKey() string {
-	v := strings.TrimSpace(c.Model.APIKeyEnv)
+	return resolveEnv(c.Model.APIKeyEnv)
+}
+
+// GatewayToken resolves ${ENV} references for the Telegram bot token, mirroring
+// APIKey so the secret can live in ~/.hiroto/.env instead of plaintext config.yaml.
+func (c *Config) GatewayToken() string {
+	return resolveEnv(c.Gateway.TelegramToken)
+}
+
+// resolveEnv expands a ${VAR} reference against the process env, then ~/.hiroto/.env.
+// A non-${...} value (e.g. a literal key) is returned unchanged.
+func resolveEnv(v string) string {
+	v = strings.TrimSpace(v)
 	if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {
 		envName := v[2 : len(v)-1]
 		if val := os.Getenv(envName); val != "" {
@@ -85,7 +97,7 @@ func (c *Config) APIKey() string {
 		}
 		return dotEnvValue(HomeDir(), envName)
 	}
-	return v // literal key
+	return v
 }
 
 // dotEnvValue does a minimal KEY=VALUE lookup in <dir>/.env (no export, quotes stripped).

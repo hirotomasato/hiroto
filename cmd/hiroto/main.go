@@ -843,13 +843,13 @@ func runToolCmd(name string) {
 
 // runGateway starts the Telegram bot (and future WhatsApp) if configured.
 func runGateway(cfg *config.Config, mem *memory.Store) {
-	if cfg.Gateway.TelegramToken == "" {
+	if cfg.GatewayToken() == "" {
 		fmt.Fprintln(os.Stderr, "hiroto: gateway.telegram_token tidak diatur di config.yaml")
 		os.Exit(1)
 	}
 	ag := buildAgent(cfg, mem)
 	fmt.Println("◆ Hiroto gateway — Telegram bot berjalan…")
-	log.Fatal(gateway.Telegram(cfg.Gateway.TelegramToken, ag))
+	log.Fatal(gateway.Telegram(cfg.GatewayToken(), ag))
 }
 
 // llmAdapter bridges tools.LLMClient to the internal LLM client.

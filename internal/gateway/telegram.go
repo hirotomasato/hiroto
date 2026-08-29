@@ -1,5 +1,5 @@
 // Package gateway connects Hiroto to messaging platforms.
-// Currently supports Telegram Bot API.
+// Currently supports the Telegram Bot API (long polling).
 package gateway
 
 import (
@@ -10,11 +10,19 @@ import (
 	"time"
 
 	"github.com/hirotomasato/hiroto/internal/agent"
+	"github.com/hirotomasato/hiroto/internal/llm"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+// chat keeps per-chat conversation state so users never share context.
+type chat struct {
+	messages []llm.Message
+}
+
 // Telegram starts a polling bot that forwards messages to the agent.
+// Each chat gets its own isolated conversation (messages are swapped in and
+// out of the shared agent around every turn).
 func Telegram(token string, ag *agent.Agent) error {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -26,6 +34,8 @@ func Telegram(token string, ag *agent.Agent) error {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
+
+	chats := make(map[int64]*chat)
 
 	for update := range updates {
 		if update.Message == nil {
@@ -45,24 +55,34 @@ func Telegram(token string, ag *agent.Agent) error {
 			send(bot, chatID, reply, msg.MessageID)
 			continue
 		case text == "/new":
-			ag.Messages = nil
+			delete(chats, chatID)
 			send(bot, chatID, "— sesi baru —", msg.MessageID)
 			continue
 		case text == "/help":
-			send(bot, chatID, "Hiroto · personal agent · v0.3.0\nKirim pesan untuk bertanya, kasih tugas, atau minta bantuan.", msg.MessageID)
+			send(bot, chatID, "Hiroto · personal agent\nKirim pesan untuk bertanya, kasih tugas, atau minta bantuan.\n/new untuk mulai sesi baru.", msg.MessageID)
 			continue
 		case text == "":
 			continue
 		}
 
-		// Process through agent
+		// Process through agent with THIS chat's own history.
 		log.Printf("[gateway] %s: %s", msg.From.UserName, text)
 		typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
 		bot.Send(typing)
 
+		st, ok := chats[chatID]
+		if !ok {
+			st = &chat{}
+			chats[chatID] = st
+		}
+		// Swap in this chat's history; Run appends to ag.Messages, so save it
+		// back after the turn so the next message in this chat continues it.
+		ag.Messages = st.messages
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		answer, err := ag.Run(ctx, text, nil)
 		cancel()
+		st.messages = ag.Messages
 		if err != nil {
 			send(bot, chatID, "✗ error: "+err.Error(), msg.MessageID)
 			continue
