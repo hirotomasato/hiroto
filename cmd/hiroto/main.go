@@ -282,114 +282,11 @@ func colorizeDiff(s string) string {
 }
 
 // toolActivity turns a tool call into a short, natural activity phrase —
-// Hermes-style ("Reading main.go", "Running the tests") — so the user sees
-// WHAT is happening in plain language, not just the raw tool name.
-//
-// If the model supplied an "activity" arg (its own present-tense narration),
-// that wins. Otherwise we derive a label from the tool name + key argument.
+// Hermes-style ("Reading main.go", "Running the tests"). Delegates to the
+// shared agent.ActivityLabel so the TUI and the Telegram gateway narrate tool
+// activity identically.
 func toolActivity(name, rawArgs string) string {
-	args := map[string]any{}
-	if rawArgs != "" {
-		_ = json.Unmarshal([]byte(rawArgs), &args)
-	}
-	str := func(k string) string {
-		if v, ok := args[k].(string); ok {
-			return v
-		}
-		return ""
-	}
-	// Model-authored narration takes priority (Hermes-style dynamic label).
-	if a := strings.TrimSpace(str("activity")); a != "" {
-		if len(a) > 56 {
-			a = a[:56] + "…"
-		}
-		return a
-	}
-	first := func(keys ...string) string {
-		for _, k := range keys {
-			if v := str(k); v != "" {
-				return v
-			}
-			// arrays (e.g. web_extract "urls"): take the first element
-			if arr, ok := args[k].([]any); ok && len(arr) > 0 {
-				if s, ok := arr[0].(string); ok && s != "" {
-					return s
-				}
-			}
-		}
-		return ""
-	}
-	clip := func(s string, n int) string {
-		s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-		if len(s) > n {
-			return s[:n] + "…"
-		}
-		return s
-	}
-	base := func(p string) string {
-		if p == "" {
-			return ""
-		}
-		return filepath.Base(p)
-	}
-
-	switch name {
-	case "read_file":
-		return join("Reading", base(str("path")))
-	case "write_file":
-		return join("Writing", base(str("path")))
-	case "patch":
-		return join("Editing", base(str("path")))
-	case "search_files":
-		q := clip(str("pattern"), 32)
-		if str("target") == "files" {
-			return join("Finding files", q)
-		}
-		return join("Searching", q)
-	case "terminal":
-		return join("Running", clip(str("command"), 44))
-	case "execute_code", "execute_python":
-		return "Running script"
-	case "process":
-		return join("Process:", str("action"))
-	case "skill_view":
-		return join("Opening skill", str("name"))
-	case "skill_manage":
-		return join("Skill:", str("action"))
-	case "web_search":
-		return join("Searching web", clip(str("query"), 40))
-	case "web_extract", "web_fetch":
-		return join("Fetching", clip(first("urls", "url"), 44))
-	case "browser_navigate":
-		return join("Opening", clip(str("url"), 44))
-	case "browser_click":
-		return "Clicking element"
-	case "browser_type":
-		return "Typing in browser"
-	case "browser_fetch", "browser_exec":
-		return "Browser automation"
-	case "browser_screenshot", "browser_screenshot_cdp":
-		return "Browser screenshot"
-	case "memory":
-		return join("Memory:", str("action"))
-	case "todo":
-		return "Updating todos"
-	case "session_search":
-		return join("Searching sessions", clip(str("query"), 40))
-	}
-	// Unknown tool: show the tool name + first meaningful arg.
-	if d := clip(first("path", "query", "name", "command", "url"), 40); d != "" {
-		return name + " " + d
-	}
-	return name
-}
-
-// join concatenates a verb and detail, dropping the detail when empty.
-func join(verb, detail string) string {
-	if detail == "" {
-		return verb
-	}
-	return verb + " " + detail
+	return agent.ActivityLabel(name, rawArgs)
 }
 
 // renderTodoPanel draws a compact live checklist above the input, reflecting

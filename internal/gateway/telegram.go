@@ -500,9 +500,11 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	ag.Emit = func(e agent.Event) {
 		switch e.Type {
 		case "tool_start":
-			live.push("▸ " + e.ToolName + " …")
+			live.push("▸ " + agent.ActivityLabel(e.ToolName, e.ToolArgs) + " …")
 		case "tool_end":
-			live.push("  ✓ " + e.ToolName + " (" + e.Duration.Round(100*time.Millisecond).String() + ")")
+			live.push("  ✓ " + agent.ActivityLabel(e.ToolName, e.ToolArgs) + " (" + e.Duration.Round(100*time.Millisecond).String() + ")")
+		case "compress_start", "compress_end":
+			live.push("⚡ " + e.Text)
 		case "error":
 			live.push("  ✗ " + e.Text)
 		}
