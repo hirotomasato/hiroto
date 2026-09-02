@@ -270,8 +270,21 @@ func registerReadFile(r *Registry) {
 			"limit":  map[string]any{"type": "integer", "description": "Max lines (default 2000)"},
 		}, "path"),
 		Exec: func(ctx context.Context, args map[string]any) Result {
-			path, _ := args["path"].(string)
-			data, err := os.ReadFile(path)
+					path, _ := args["path"].(string)
+					// Resolve relative paths against the current working directory
+					// and block reads of sensitive files (env, keys, tokens).
+					if abs, err := filepath.Abs(path); err == nil {
+						path = abs
+					}
+					if w := sensitivePath(path); w != "" {
+						// Allow --force for intentional access.
+						if strings.HasPrefix(path, "--force ") {
+							path = strings.TrimPrefix(path, "--force ")
+						} else {
+							return Result{Output: "BLOCKED: " + w + "\n\nGunakan --force untuk tetap membaca: read_file(path=\"--force " + path + "\")", IsError: true}
+						}
+					}
+					data, err := os.ReadFile(path)
 			if err != nil {
 				return Result{Output: err.Error(), IsError: true}
 			}
@@ -319,6 +332,17 @@ func registerWriteFile(r *Registry, opts Options) {
 			content, _ := args["content"].(string)
 			if path == "" {
 				return Result{Output: "empty path", IsError: true}
+			}
+			// Resolve and check for sensitive files (env, keys, tokens).
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+			if w := sensitivePath(path); w != "" {
+				if strings.HasPrefix(content, "--force ") {
+					content = strings.TrimPrefix(content, "--force ")
+				} else {
+					return Result{Output: "BLOCKED: " + w + "\n\nGunakan --force prefix di content untuk tetap menulis: write_file(content=\"--force\\n\" + content)", IsError: true}
+				}
 			}
 			if dir := filepath.Dir(path); dir != "" {
 				_ = os.MkdirAll(dir, 0o755)
@@ -638,6 +662,11 @@ func dangerousCmd(cmd string) string {
 		strings.Contains(lower, "rm -rf /var") || strings.Contains(lower, "rm -rf /home") {
 		return "perintah menghapus direktori sistem secara rekursif"
 	}
+	// Recursive delete on everything (/*, find -delete, etc.).
+	if strings.Contains(lower, "rm -rf /*") || strings.Contains(lower, "rm -rf ./*") ||
+		strings.Contains(lower, "find / -delete") || strings.Contains(lower, "find . -delete") {
+		return "perintah menghapus semua file secara rekursif"
+	}
 	// Force push to main/master.
 	if strings.Contains(lower, "git push") && (strings.Contains(lower, "--force") || strings.Contains(lower, "-f")) &&
 		(strings.Contains(lower, "main") || strings.Contains(lower, "master")) {
@@ -659,6 +688,48 @@ func dangerousCmd(cmd string) string {
 	if strings.Contains(lower, "chmod") && strings.Contains(lower, "777") &&
 		(strings.Contains(lower, "/etc") || strings.Contains(lower, "/usr") || strings.Contains(lower, "/var") || strings.Contains(lower, "/")) {
 		return "chmod 777 pada direktori sistem"
+	}
+	// Download + execute remote scripts (curl/wget piped to shell).
+	if (strings.Contains(lower, "curl ") || strings.Contains(lower, "wget ")) &&
+		(strings.Contains(lower, "| bash") || strings.Contains(lower, "| sh") || strings.Contains(lower, "| sudo bash")) {
+		return "download dan eksekusi script remote — gunakan review manual"
+	}
+	return ""
+}
+
+// ---- path safety ----
+
+// resolvePath resolves a relative path against the workdir and returns the
+// absolute form. Absolute paths are returned as-is (the agent has full
+// filesystem access — this is a CLI tool, not a sandbox). Relative paths
+// that escape the workdir via ../ are resolved but still allowed.
+func resolvePath(raw, workdir string) string {
+	if filepath.IsAbs(raw) {
+		return raw
+	}
+	if workdir == "" {
+		workdir = "."
+	}
+	absWD, _ := filepath.Abs(workdir)
+	return filepath.Join(absWD, raw)
+}
+
+// sensitivePath returns a warning if the path targets a sensitive file the
+// agent should not touch (.env, SSH keys, git config, etc.).
+func sensitivePath(path string) string {
+	base := filepath.Base(path)
+	lower := strings.ToLower(base)
+	switch {
+	case lower == ".env" || strings.HasSuffix(lower, ".env"):
+		return "file .env — berisi kredensial"
+	case lower == ".gitconfig" || lower == ".git-credentials":
+		return "git config — berisi kredensial"
+	case strings.HasPrefix(lower, "id_") && (strings.HasSuffix(lower, "_rsa") || strings.HasSuffix(lower, "_ed25519") || strings.HasSuffix(lower, "_ecdsa")):
+		return "SSH private key — jangan diekspos"
+	case lower == "authorized_keys" || lower == "known_hosts":
+		return "SSH config — dapat mengunci akses"
+	case strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "credential"):
+		return "file mengandung kredensial"
 	}
 	return ""
 }

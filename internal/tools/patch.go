@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aymanbagabas/go-udiff"
@@ -20,6 +21,13 @@ func registerPatch(r *Registry, opts Options) {
 			newStr, _ := args["new_string"].(string)
 			if path == "" || oldStr == "" {
 				return Result{Output: "missing path or old_string", IsError: true}
+			}
+			// Resolve and check for sensitive files.
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+			if w := sensitivePath(path); w != "" {
+				return Result{Output: "BLOCKED: " + w + "\n\nGunakan terminal untuk memaksa: terminal(command=\"sed -i ... " + path + "\")", IsError: true}
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
