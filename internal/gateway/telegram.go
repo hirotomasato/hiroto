@@ -20,6 +20,7 @@ import (
 	"github.com/hirotomasato/hiroto/internal/llm"
 	"github.com/hirotomasato/hiroto/internal/memory"
 	"github.com/hirotomasato/hiroto/internal/session"
+	"github.com/hirotomasato/hiroto/internal/tools"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -66,6 +67,7 @@ type gw struct {
 	ag      *agent.Agent
 	mem     *memory.Store
 	sess    *session.Store
+	todos   *tools.TodoStore // shared with the todo tool; retargeted per chat turn
 	chats   map[int64]*chat
 	cancels map[int64]context.CancelFunc // per-chat cancel for /stop
 	cancMu  sync.Mutex
@@ -123,6 +125,7 @@ func Telegram(token string, ag *agent.Agent, opts Options) error {
 		ag:      ag,
 		mem:     mem,
 		sess:    session.New(),
+		todos:   tools.SharedTodo(),
 		chats:   make(map[int64]*chat),
 		cancels: make(map[int64]context.CancelFunc),
 		opts:    opts,
@@ -204,11 +207,17 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 			"/compress — ringkas konteks percakapan\n"+
 			"/status — info sesi & model\n"+
 			"/sessions [cari] — cari sesi\n"+
-			"/todo — catat tugas via agent", replyTo)
+			"/todo — lihat task, /todo done <id>, /todo unstick, /todo clear", replyTo)
 		return
 
 	case "/new":
 		delete(g.chats, chatID)
+		// A new conversation gets a clean plan (the id is chat-stable, so the
+		// old checklist file would otherwise be inherited).
+		g.bindTodos(chatID)
+		if g.todos != nil {
+			g.todos.Clear()
+		}
 		send(g.bot, chatID, "— sesi baru —", replyTo)
 		return
 
@@ -229,7 +238,7 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 		return
 
 	case "/todo":
-		send(g.bot, chatID, "todo dibaca agent via tool — ketik aja tugasnya, agent yang catat.", replyTo)
+		g.handleTodo(chatID, arg, replyTo)
 		return
 
 	case "/retry":
@@ -298,8 +307,42 @@ func (g *gw) saveChat(st *chat) {
 		Created:  time.Now(),
 		Updated:  time.Now(),
 		Messages: toStored(st.messages),
+		Todos:    todosToStored(g.todos),
 	}
 	_ = g.sess.Save(sess)
+}
+
+// todosToStored snapshots the checklist into the session file so a gateway
+// restart doesn't lose the plan.
+func todosToStored(ts *tools.TodoStore) []session.StoredTodo {
+	if ts == nil {
+		return nil
+	}
+	items := ts.Snapshot()
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]session.StoredTodo, 0, len(items))
+	for _, it := range items {
+		out = append(out, session.StoredTodo{ID: it.ID, Content: it.Content, Status: it.Status})
+	}
+	return out
+}
+
+// restoreTodos loads a saved session's plan into the store, never as running.
+func restoreTodos(ts *tools.TodoStore, sess *session.Session) {
+	if ts == nil || sess == nil {
+		return
+	}
+	ts.Retarget(sess.ID)
+	if len(sess.Todos) > 0 {
+		items := make([]tools.TodoItem, 0, len(sess.Todos))
+		for _, t := range sess.Todos {
+			items = append(items, tools.TodoItem{ID: t.ID, Content: t.Content, Status: t.Status})
+		}
+		ts.Save(items)
+	}
+	ts.Demote()
 }
 
 func firstUserText(msgs []llm.Message, max int) string {
@@ -419,7 +462,13 @@ func (g *gw) handleResume(chatID int64, arg string, replyTo int) {
 		if sess.Model != "" {
 			g.ag.Client.Model = sess.Model
 		}
-		send(g.bot, chatID, "✓ sesi dilanjutkan: "+sess.ID+" · "+sess.Title, replyTo)
+		st.id = sess.ID
+		restoreTodos(g.todos, sess)
+		msg := "✓ sesi dilanjutkan: " + sess.ID + " · " + sess.Title
+		if done, total := g.todos.Counts(); total > 0 {
+			msg += fmt.Sprintf("\ntask list: %d/%d selesai", done, total)
+		}
+		send(g.bot, chatID, msg, replyTo)
 		return
 	}
 
@@ -546,6 +595,12 @@ func (g *gw) handleStatus(chatID int64, replyTo int) {
 	if ok {
 		fmt.Fprintf(&b, "sesi: %s\n", st.id)
 	}
+	if g.todos != nil {
+		g.bindTodos(chatID)
+		if done, total := g.todos.Counts(); total > 0 {
+			fmt.Fprintf(&b, "task: %d/%d selesai\n", done, total)
+		}
+	}
 	b.WriteString("gateway: telegram polling")
 	send(g.bot, chatID, b.String(), replyTo)
 }
@@ -592,6 +647,9 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 
 	ag := g.ag
 	ag.Messages = st.messages
+	// Bind the checklist to this chat's session before the agent can call the
+	// todo tool, so chats never write into each other's plan.
+	g.bindTodos(chatID)
 
 	live := newLive(g.bot, chatID)
 	live.cleanup = g.opts.CleanupProgress
@@ -628,12 +686,18 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	st.messages = ag.Messages
 
 	if err != nil {
+		// The run died (cancel/timeout/provider error): nothing is working on
+		// the plan any more, so don't leave a task claiming to be in progress.
+		if g.todos != nil {
+			g.todos.Demote()
+		}
 		if ctx.Err() == context.Canceled {
 			live.finish("■ dihentikan")
 			g.saveChat(st)
 			return
 		}
 		live.finish("✗ error: " + err.Error())
+		g.saveChat(st)
 		return
 	}
 	if answer == "" {

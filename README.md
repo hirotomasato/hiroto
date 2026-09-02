@@ -97,6 +97,11 @@ Type `/` to open the scrollable command picker — arrow keys to navigate, Enter
 **Productivity:**
 `/prompt` `/bg` `/goal` `/copy` `/image` `/todo`
 
+`/todo` manages the live checklist shown above the input: bare `/todo` lists it,
+`/todo add <teks>`, `/todo done <id>`, `/todo undo <id>`, `/todo unstick` (release
+tasks the agent left marked in-progress), `/todo clear`. The list is per session
+and is stored with it, so resuming a session brings its plan back.
+
 **Update & rollback:**
 `/update` `/upgrade` `/rollback`
 

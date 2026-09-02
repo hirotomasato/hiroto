@@ -28,6 +28,14 @@ type StoredMessage struct {
 	ToolCalls  []StoredToolCall `json:"tool_calls,omitempty"`
 }
 
+// StoredTodo is one persisted checklist item (mirrors tools.TodoItem, kept
+// local so the session package stays dependency-free).
+type StoredTodo struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	Status  string `json:"status"`
+}
+
 // Session is a saved conversation.
 type Session struct {
 	ID       string          `json:"id"`
@@ -36,6 +44,7 @@ type Session struct {
 	Created  time.Time       `json:"created"`
 	Updated  time.Time       `json:"updated"`
 	Messages []StoredMessage `json:"messages"`
+	Todos    []StoredTodo    `json:"todos,omitempty"`
 }
 
 // Store manages the sessions directory.

@@ -15,6 +15,7 @@ import (
 	"github.com/hirotomasato/hiroto/internal/llm"
 	"github.com/hirotomasato/hiroto/internal/memory"
 	"github.com/hirotomasato/hiroto/internal/session"
+	"github.com/hirotomasato/hiroto/internal/tools"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -77,8 +78,50 @@ func (m *model) saveSession() {
 		Created:  time.Now(),
 		Updated:  time.Now(),
 		Messages: toStored(m.ag.Messages),
+		Todos:    todosToStored(m.todos),
 	}
 	_ = m.sessStore.Save(sess)
+}
+
+// todosToStored snapshots the checklist for the session file, so resuming a
+// session brings back its plan (the panel is otherwise empty after a restart).
+func todosToStored(ts *tools.TodoStore) []session.StoredTodo {
+	if ts == nil {
+		return nil
+	}
+	items := ts.Snapshot()
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]session.StoredTodo, 0, len(items))
+	for _, it := range items {
+		out = append(out, session.StoredTodo{ID: it.ID, Content: it.Content, Status: it.Status})
+	}
+	return out
+}
+
+// todosFromStored rebuilds checklist items from a saved session.
+func todosFromStored(st []session.StoredTodo) []tools.TodoItem {
+	out := make([]tools.TodoItem, 0, len(st))
+	for _, t := range st {
+		out = append(out, tools.TodoItem{ID: t.ID, Content: t.Content, Status: t.Status})
+	}
+	return out
+}
+
+// restoreTodos rebinds the store to sess and loads its plan. Session-file items
+// win when present; otherwise whatever the per-session todo file holds stays.
+func restoreTodos(ts *tools.TodoStore, sess *session.Session) {
+	if ts == nil || sess == nil {
+		return
+	}
+	ts.Retarget(sess.ID)
+	if len(sess.Todos) > 0 {
+		ts.Save(todosFromStored(sess.Todos))
+	}
+	// A resumed session isn't running anything yet: never restore a task as
+	// in_progress or the panel lies about work in flight.
+	ts.Demote()
 }
 
 func firstUserText(msgs []llm.Message, max int) string {
@@ -131,7 +174,11 @@ func (m *model) loadSessionByID(id string) bool {
 	if sess.Model != "" {
 		m.ag.Client.Model = sess.Model
 	}
+	restoreTodos(m.todos, sess)
 	m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})
+	if done, total := m.todos.Counts(); total > 0 {
+		m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("task list dipulihkan: %d/%d selesai", done, total))})
+	}
 	m.refresh()
 	return true
 }
@@ -248,6 +295,8 @@ func runOneShotContinue(cfg *config.Config, mem *memory.Store, query string) {
 	}
 	ag := buildAgent(cfg, mem)
 	ag.Messages = fromStored(sess.Messages)
+	// -c continues a saved session, so it owns that session's checklist too.
+	restoreTodos(tools.SharedTodo(), sess)
 	oneShotHeader(cfg, len(ag.Skills))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -261,6 +310,7 @@ func runOneShotContinue(cfg *config.Config, mem *memory.Store, query string) {
 	}
 	_ = answer
 	sess.Messages = toStored(ag.Messages)
+	sess.Todos = todosToStored(tools.SharedTodo())
 	sess.Updated = time.Now()
 	sess.Model = ag.Client.Model
 	_ = ss.Save(sess)
@@ -282,6 +332,7 @@ func runResumeTUI(cfg *config.Config, mem *memory.Store, id string) error {
 	// Load the transcript into the scrollback so the chat history is visible.
 	m := initialModel(cfg, ag, mem, ss)
 	m.sessID = sess.ID
+	restoreTodos(m.todos, sess)
 	if sess.Title != "" {
 		m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})
 	}

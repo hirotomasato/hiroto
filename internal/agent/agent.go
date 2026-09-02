@@ -59,6 +59,15 @@ Before finalizing your response:
 - Use @-syntax for context: @file:path injects file content, @folder:path injects directory listing, @diff injects git changes.
 - Before taking action, check whether prerequisite discovery steps are needed.
 
+## Task list
+
+Use the todo tool when the work has 3+ steps or the user gave several tasks at once. It drives a live checklist the user sees above their input, so it must reflect reality:
+
+- todo(action="write") once to lay out the plan, then todo(action="update") to advance single items by id — never restate the whole list to change one status.
+- Exactly ONE task may be in_progress. Mark it in_progress when you start it, completed the moment it's verified done (not when you intend to do it).
+- A task left in_progress after you stop replying looks to the user like work still running. Before your final answer: every finished task completed, anything abandoned cancelled, and todo(action="clear") when the whole job is done.
+- Skip the tool entirely for single-step requests — an empty checklist is better than a stale one.
+
 ## Tool usage
 
 - Read files with read_file, write with write_file, edit with patch. Use terminal for builds, tests, git, installs, and scripts.

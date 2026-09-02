@@ -27,6 +27,18 @@ Hermes-parity pass across the TUI and Telegram gateway.
 
 ## Unreleased
 
+### Layout (fix: garis atas banner hilang)
+- Frame TUI kini dijamin pas sama tinggi terminal: chrome layout diukur dari satu sumber (`layoutParts`), slot kosong (clarify/flash/panel) gak lagi ngeluarin baris hantu, jadi garis rule di atas wordmark HIROTO balik tampil di semua ukuran terminal
+
+### Task list (fix: task nyangkut di panel)
+- Checklist is now **per session** (`~/.hiroto/todos/<id>.json`) instead of one global `todo.json`; a fresh launch no longer inherits the previous run's plan, and the legacy file is removed on first start
+- Plan is stored with the session and restored on `/resume` / `--resume` / `-c` (never restored as in-progress)
+- `todo` tool gained working `update` (merge by id), plus `complete` and `clear`; exactly one task may be in_progress
+- In-progress tasks are released back to pending when a run is cancelled or fails (Ctrl+C, gateway error) — the panel can't claim work is running when nothing is
+- `/todo` is a real command: `add`, `done <id>`, `undo <id>`, `unstick`, `clear`; Telegram `/todo` shows and edits the same list
+- Panel windows around the active task on long plans, marks an idle in-progress row, and refreshes via stat instead of re-parsing every frame
+- Agent prompt now spells out task-list discipline (advance by id, close out before finishing)
+
 - Exit summary on quit: resume commands (`hiroto --resume <id>`, `hiroto -c "<title>"`), session id, title, duration, message counts
 - `hiroto -c "prompt"` — continue the last saved session, one-shot
 - `hiroto --resume <id>` — reopen a saved session in the TUI with full transcript

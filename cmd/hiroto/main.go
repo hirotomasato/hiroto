@@ -87,8 +87,10 @@ type line struct {
 type (
 	streamMsg        string        // assistant text chunk
 	eventMsg         = agent.Event // alias: tool_start / tool_end / error
-	assistantDoneMsg struct{}      // turn finished
-	clarifyMsg       struct {
+	assistantDoneMsg struct {      // turn finished
+		failed bool // the run returned an error (or was cancelled)
+	}
+	clarifyMsg struct {
 		req tools.ClarifyRequest
 	}
 )
@@ -151,7 +153,11 @@ func initialModel(cfg *config.Config, ag *agent.Agent, mem *memory.Store, ss *se
 	ta.SetHeight(2)
 	ta.Focus()
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle().Foreground(cPrimary)))
-	m := model{cfg: cfg, ag: ag, mem: mem, sessStore: ss, sessID: newSessionID(), input: ta, spinner: sp, histIdx: -1, startedAt: time.Now(), todos: tools.NewTodoStore()}
+	m := model{cfg: cfg, ag: ag, mem: mem, sessStore: ss, sessID: newSessionID(), input: ta, spinner: sp, histIdx: -1, startedAt: time.Now(), todos: tools.SharedTodo()}
+	// Bind the checklist to this session (and export HIROTO_SESSION so a child
+	// `hiroto tool todo` process writes the same file). A fresh session starts
+	// with an empty plan instead of inheriting whatever ran last.
+	m.todos.Retarget(m.sessID)
 	m.vp = viewport.New(80, 20)
 	m.vp.KeyMap = viewport.KeyMap{} // disable default pager keys — we handle scrolling ourselves
 	m.vp.SetContent("")
@@ -290,44 +296,73 @@ func toolActivity(name, rawArgs string) string {
 }
 
 // renderTodoPanel draws a compact live checklist above the input, reflecting
-// the agent's current task list. Reloads from disk each render so writes made
-// by the todo tool (a separate store instance) show up immediately. Returns ""
-// when there are no tasks, so the panel takes no space until the agent plans.
+// the agent's current task list. Picks up writes made by a child `hiroto tool
+// todo` process via a cheap stat (ReloadIfChanged) instead of re-parsing the
+// file on every frame. Returns "" when there are no tasks, so the panel takes
+// no space until the agent actually plans something.
 func (m *model) renderTodoPanel() string {
 	if m.todos == nil {
 		return ""
 	}
-	m.todos.Reload()
-	items := m.todos.Items
+	m.todos.ReloadIfChanged()
+	items := m.todos.Snapshot()
 	if len(items) == 0 {
 		return ""
 	}
 	done := 0
 	for _, it := range items {
-		if it.Status == "completed" || it.Status == "cancelled" {
+		if it.Status == tools.StatusCompleted || it.Status == tools.StatusCancelled {
 			done++
 		}
 	}
-	// Cap visible rows so a long list can't eat the whole screen.
+	// Keep the active task visible: when the list is longer than the cap,
+	// window around the in_progress item instead of always showing the head
+	// (otherwise a 20-task plan hides the one task that's actually running).
 	const maxRows = 8
 	shown := items
-	extra := 0
+	hiddenBefore, hiddenAfter := 0, 0
 	if len(items) > maxRows {
-		shown = items[:maxRows]
-		extra = len(items) - maxRows
+		start := 0
+		for i, it := range items {
+			if it.Status == tools.StatusInProgress {
+				start = i - maxRows/2
+				break
+			}
+		}
+		if start < 0 {
+			start = 0
+		}
+		if start > len(items)-maxRows {
+			start = len(items) - maxRows
+		}
+		shown = items[start : start+maxRows]
+		hiddenBefore = start
+		hiddenAfter = len(items) - start - maxRows
 	}
 	var b strings.Builder
-	b.WriteString(stDiffHunk.Render(fmt.Sprintf("Tasks %d/%d", done, len(items))) + "\n")
+	head := fmt.Sprintf("Tasks %d/%d", done, len(items))
+	if !m.busy && done < len(items) {
+		head += "  ·  /todo untuk kelola"
+	}
+	b.WriteString(stDiffHunk.Render(head) + "\n")
+	if hiddenBefore > 0 {
+		b.WriteString(stHelp.Render(fmt.Sprintf("  … %d selesai di atas", hiddenBefore)) + "\n")
+	}
 	for _, it := range shown {
 		var mark, txt string
 		switch it.Status {
-		case "completed":
+		case tools.StatusCompleted:
 			mark = stDiffAdd.Render("✔")
 			txt = stMuted.Render(it.Content)
-		case "in_progress":
+		case tools.StatusInProgress:
 			mark = stBanner.Render("▶")
 			txt = stBanner.Render(it.Content)
-		case "cancelled":
+			if !m.busy {
+				// Nothing is running, yet a task claims to be: say so instead
+				// of letting the user stare at a spinner-less "in progress".
+				txt += stHelp.Render("  (idle)")
+			}
+		case tools.StatusCancelled:
 			mark = stErr.Render("✗")
 			txt = stMuted.Render(it.Content)
 		default:
@@ -336,8 +371,8 @@ func (m *model) renderTodoPanel() string {
 		}
 		b.WriteString("  " + mark + " " + txt + "\n")
 	}
-	if extra > 0 {
-		b.WriteString(stHelp.Render(fmt.Sprintf("  … +%d more", extra)) + "\n")
+	if hiddenAfter > 0 {
+		b.WriteString(stHelp.Render(fmt.Sprintf("  … +%d lagi", hiddenAfter)) + "\n")
 	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -372,7 +407,7 @@ func (m *model) runTurn(text string) {
 		if err != nil {
 			streamCh <- eventMsg(agent.Event{Type: "error", Text: err.Error()})
 		}
-		streamCh <- assistantDoneMsg{}
+		streamCh <- assistantDoneMsg{failed: err != nil}
 		chMu.Unlock()
 	}()
 }
@@ -502,7 +537,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancel()
 				m.busy = false
 				m.streaming = false
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("(dibatalkan)")})
+				// Nothing is running any more: an in_progress task would sit
+				// in the panel forever, so hand it back to pending.
+				if m.todos != nil {
+					if n := m.todos.Demote(); n > 0 {
+						m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("(dibatalkan — %d task → pending)", n))})
+					} else {
+						m.lines = append(m.lines, line{lineInfo, stMuted.Render("(dibatalkan)")})
+					}
+				} else {
+					m.lines = append(m.lines, line{lineInfo, stMuted.Render("(dibatalkan)")})
+				}
 				m.refresh()
 				return m, nil
 			}
@@ -609,6 +654,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.streaming = false
 		m.endAssistantLine()
+		// A failed/cancelled run leaves no one working: demote in_progress so
+		// the panel doesn't claim a task is still running. On success, warn
+		// once if the agent forgot to close out its own plan.
+		if m.todos != nil {
+			m.todos.ReloadIfChanged()
+			if msg.failed {
+				if n := m.todos.Demote(); n > 0 {
+					m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("%d task in_progress → pending (run gagal)", n))})
+				}
+			} else if stuck := m.stuckTodos(); stuck != "" {
+				m.lines = append(m.lines, line{lineInfo, stHelp.Render("task masih in_progress: " + stuck + " — /todo done <id> atau /todo unstick")})
+			}
+		}
 		m.saveSession()
 		m.refresh()
 		cmds = append(cmds, waitForActivity())
@@ -718,7 +776,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		switch fields := strings.Fields(text); fields[0] {
 		case "/help":
 			m.lines = append(m.lines,
-				line{lineInfo, stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo /quit")},
+				line{lineInfo, stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo [add|done <id>|undo <id>|unstick|clear] /quit")},
 			)
 		case "/quit", "/exit":
 			m.saveSession()
@@ -727,6 +785,11 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		case "/new":
 			m.ag.Messages = nil
 			m.sessID = newSessionID()
+			// Retarget the checklist: the old plan stays with the old session
+			// file, the new session starts empty.
+			if m.todos != nil {
+				m.todos.Retarget(m.sessID)
+			}
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render("— sesi baru —")})
 		case "/resume":
 			m.openResumePicker()
@@ -790,7 +853,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				m.lines = append(m.lines, line{lineInfo, stMuted.Render(block)})
 			}
 		case "/todo":
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("todo dibaca via tool oleh agent")})
+			m.handleTodoCmd(fields)
 		case "/retry":
 			m.handleRetry()
 		case "/undo":
@@ -884,6 +947,15 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			m.saveSession()
 			oldID := m.sessID
 			m.sessID = newSessionID()
+			// Fork the plan too: the branch starts from the same checklist,
+			// then diverges (its own file from here on).
+			if m.todos != nil {
+				items := m.todos.Snapshot()
+				m.todos.Retarget(m.sessID)
+				if len(items) > 0 {
+					m.todos.Save(items)
+				}
+			}
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("branch: %s → %s", oldID, m.sessID))})
 		case "/copy":
 			// Copy last assistant response to clipboard.
@@ -905,6 +977,15 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				m.flashMsg("pakai: /title <judul>", "error")
 			} else {
 				m.sessID = strings.Join(fields[1:], " ")
+				// The session id doubles as the checklist filename, so carry
+				// the current plan over to the renamed session.
+				if m.todos != nil {
+					items := m.todos.Snapshot()
+					m.todos.Retarget(m.sessID)
+					if len(items) > 0 {
+						m.todos.Save(items)
+					}
+				}
 				m.saveSession()
 				m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi: " + m.sessID)})
 			}
@@ -1051,14 +1132,18 @@ func (m *model) endAssistantLine() {
 
 // recalcViewport sizes the transcript viewport to leave room for the input,
 // status/help bars, and the live todo panel (which grows/shrinks with tasks).
+// Chrome is MEASURED from the real layout parts (layoutParts) instead of a
+// hardcoded constant: the old `chrome = 7` under-counted by 2 (the input box
+// is 4 rows, and empty slots below the viewport still emitted rows), which
+// made the frame taller than the terminal — the top of the frame scrolled
+// off-screen and the banner lost its top rule.
 func (m *model) recalcViewport() {
 	if m.height == 0 {
 		return
 	}
-	// chrome: input(3 with border) + status(1) + help(1) + clarify/flash slack(2)
-	chrome := 7
-	if panel := m.renderTodoPanel(); panel != "" {
-		chrome += lipgloss.Height(panel)
+	chrome := 0
+	for _, part := range m.layoutParts(false) {
+		chrome += lipgloss.Height(part)
 	}
 	h := m.height - chrome
 	if h < 1 {
@@ -1114,52 +1199,8 @@ func (m model) View() string {
 	if m.width == 0 {
 		return "memuat…"
 	}
-	status := stMuted.Render("siap")
-	if m.busy {
-		label := "bekerja…"
-		if m.streaming {
-			label = "menulis…"
-		}
-		status = stToolTag.Render(m.spinner.View() + " " + label)
-	}
-	left := stChip.Render(" HR ") + stMuted.Render(" hiroto v"+version)
-	right := status
-	if len(m.ag.Messages) > 0 {
-		tok := 0
-		for _, msg := range m.ag.Messages {
-			if s, ok := msg.Content.(string); ok {
-				tok += len(s) / 3
-			}
-		}
-		right = stMuted.Render(fmt.Sprintf("~%dK", tok/1000)) + "  " + status
-	}
-	pad := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
-	if pad < 1 {
-		pad = 1
-	}
-	statusBar := left + strings.Repeat(" ", pad) + right
-	clarifyBar := ""
-	if m.clarifyQuestion != "" {
-		clarifyBar = stBanner.Render("◆ " + m.clarifyQuestion)
-	}
-	// Flash card (floating error/info popup).
-	flashBar := ""
-	if m.flash != "" {
-		if m.flashKind == "error" {
-			flashBar = stFlashErr.Render(m.flash)
-		} else {
-			flashBar = stFlashInfo.Render(m.flash)
-		}
-	}
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		m.vp.View(),
-		m.renderTodoPanel(),
-		clarifyBar,
-		flashBar,
-		stInput.Render(m.input.View()),
-		statusBar,
-		stHelp.Render("Enter kirim • Ctrl+P model • Ctrl+R sesi • Ctrl+S simpan • Ctrl+L bersih • ↑↓ history • scroll/PgUp-Dn geser • Ctrl+C keluar"),
-	)
+
+	body := lipgloss.JoinVertical(lipgloss.Left, m.layoutParts(true)...)
 	if m.picker != nil {
 		box := m.renderPicker()
 		// center the modal over a dimmed backdrop (Hermes-style overlay)
@@ -1317,6 +1358,11 @@ func main() {
 
 	setWindowTitle()
 	m := initialModel(cfg, ag, mem, ss)
+	// Housekeeping: drop the pre-0.6 global todo.json (its plan belonged to
+	// whichever session ran last) and expire checklists from sessions that
+	// haven't been touched in a fortnight.
+	tools.MigrateLegacyTodo()
+	tools.PruneTodos(14 * 24 * time.Hour)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "hiroto:", err)
@@ -1374,7 +1420,7 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 			return out, err
 		},
 		Memory: mem,
-		Todo:   tools.NewTodoStore(),
+		Todo:   tools.SharedTodo(),
 		Skills: newSkillIdx(skillList),
 		SessionSearch: func(q string) []session.Session {
 			return session.New().Search(q)
@@ -1419,6 +1465,9 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 
 // runOneShot executes a single query headlessly (no TUI), streaming to stdout.
 func runOneShot(cfg *config.Config, mem *memory.Store, query string) {
+	// One-shot runs get their own throwaway checklist id, so they can't pick up
+	// (or leave behind) a plan belonging to an interactive session.
+	os.Setenv(tools.EnvSessionID, newSessionID())
 	ag := buildAgent(cfg, mem)
 	oneShotHeader(cfg, len(ag.Skills))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -1427,6 +1476,8 @@ func runOneShot(cfg *config.Config, mem *memory.Store, query string) {
 		fmt.Print(chunk)
 	})
 	fmt.Println()
+	// os.Exit skips defers, so drop the throwaway checklist on both paths.
+	tools.SharedTodo().Clear()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "\nhiroto: error:", err)
 		os.Exit(1)
@@ -1517,6 +1568,10 @@ func runAPI(cfg *config.Config, mem *memory.Store) {
 	if port == 0 {
 		port = 20129
 	}
+	// API requests are stateless and concurrent, so the checklist there has no
+	// single owner. Park it under a fixed id ("_api") instead of letting it
+	// land on whatever session ran last; PruneTodos expires it eventually.
+	os.Setenv(tools.EnvSessionID, "_api")
 	ag := buildAgent(cfg, mem)
 	api.PrintBanner(port, ag.Client.Model)
 	srv := api.New(ag, port)
@@ -1611,7 +1666,7 @@ func matchingDirs(prefix, workdir string) []string {
 func matchingCommands(prefix string) []string {
 	all := []string{
 		"/help", "/new", "/resume", "/compress", "/skills",
-		"/model", "/memory add", "/memory del", "/todo", "/quit",
+		"/model", "/memory add", "/memory del", "/todo", "/todo add", "/todo done", "/todo unstick", "/todo clear", "/quit",
 		"/retry", "/undo", "/diff", "/stop", "/steer",
 		"/verbose", "/usage", "/rollback",
 		"/prompt", "/bg", "/goal", "/branch", "/copy",
@@ -1970,7 +2025,7 @@ func (m *model) runTurnSilent(text string) {
 		if err != nil {
 			streamCh <- eventMsg(agent.Event{Type: "error", Text: err.Error()})
 		}
-		streamCh <- assistantDoneMsg{}
+		streamCh <- assistantDoneMsg{failed: err != nil}
 		chMu.Unlock()
 	}()
 }

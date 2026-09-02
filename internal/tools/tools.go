@@ -486,23 +486,28 @@ func registerTodo(r *Registry, opts Options) {
 		ts = NewTodoStore()
 	}
 	r.Register(&Tool{
-		Name:        "todo",
-		Description: "Manage your task list for multi-step work. Actions: write (replace list), update (merge), read.",
+		Name: "todo",
+		Description: "Manage your task list for multi-step work (3+ steps). Actions: " +
+			"write (replace the whole list), update (merge changed items by id — advance a task without restating the list), " +
+			"read (current list), complete (mark one id completed), clear (drop the list when the work is done). " +
+			"Exactly one task may be in_progress. Mark tasks completed as you finish them and clear the list at the end of the job — " +
+			"a task left in_progress is shown to the user as still running.",
 		Parameters: obj(map[string]any{
-			"action": map[string]any{"type": "string", "enum": []string{"write", "read"}, "description": "Operation"},
+			"action": map[string]any{"type": "string", "enum": []string{"write", "update", "read", "complete", "clear"}, "description": "Operation"},
 			"items": map[string]any{
 				"type": "array",
 				"items": map[string]any{
 					"type":       "object",
 					"properties": map[string]any{"id": str("short id"), "content": str("task"), "status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed", "cancelled"}}},
 				},
-				"description": "Task items (for write)",
+				"description": "Task items (for write/update)",
 			},
+			"id": str("task id (for complete)"),
 		}, "action"),
 		Exec: func(ctx context.Context, args map[string]any) Result {
 			action, _ := args["action"].(string)
 			switch action {
-			case "write":
+			case "write", "update":
 				raw, _ := args["items"].([]any)
 				var items []TodoItem
 				for _, it := range raw {
@@ -515,9 +520,29 @@ func registerTodo(r *Registry, opts Options) {
 					s, _ := m["status"].(string)
 					items = append(items, TodoItem{ID: id, Content: c, Status: s})
 				}
-				ts.Save(items)
+				if len(items) == 0 {
+					return Result{Output: "no items given — pass items:[{id,content,status}]", IsError: true}
+				}
+				if action == "update" {
+					ts.Update(items)
+				} else {
+					ts.Save(items)
+				}
 				return Result{Output: ts.Render()}
+			case "complete":
+				id, _ := args["id"].(string)
+				if id == "" {
+					return Result{Output: `complete needs "id"`, IsError: true}
+				}
+				if !ts.Complete(id) {
+					return Result{Output: "unknown task id: " + id + "\n" + ts.Render(), IsError: true}
+				}
+				return Result{Output: ts.Render()}
+			case "clear":
+				ts.Clear()
+				return Result{Output: "task list cleared"}
 			default:
+				ts.Reload()
 				return Result{Output: ts.Render()}
 			}
 		},
