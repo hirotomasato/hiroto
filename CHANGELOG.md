@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.1 — 2026-09-02
+
+### Task list (fix: task nyangkut di panel)
+- Checklist per-sesi (`~/.hiroto/todos/<id>.json`) bukan satu file global `todo.json`
+- Legacy `todo.json` dihapus otomatis saat startup
+- Tool `todo`: `update` by id, batasi satu `in_progress`, mutex, atomic write
+- Demote `in_progress` otomatis saat Ctrl+C / turn gagal / gateway error
+- `/todo` jadi command beneran di TUI: `add`, `done <id>`, `undo <id>`, `unstick`, `clear`
+- Panel TUI: windowing ke task aktif, refresh pakai stat (`ReloadIfChanged`), bukan baca disk tiap frame
+- Single shared `TodoStore` via `sync.Once` — TUI / agent / gateway satu instance
+- Session JSON simpan + restore checklist; `/resume` balikin plan
+- System prompt task-list discipline: model wajib update status task
+- Gateway Telegram: `/todo` handler, bind per-chat, retarget session, demote on error
+- README + CHANGELOG + skill `hiroto-development` diupdate
+
+### Layout (fix: garis atas banner hilang)
+- `layoutParts()` jadi sumber tunggal layout — `View()` dan `recalcViewport()` diukur dari titik yang sama, gak mungkin drift lagi
+- Slot kosong (`clarifyBar`/`flashBar`/panel kosong) gak lagi emit baris hantu di `JoinVertical` → frame selalu pas tinggi terminal
+- Chrome diukur dari `layoutParts(false)` bukan hardcode 7 yang salah hitung (input box = 4 baris, bukan 3)
+- Garis rule atas di atas wordmark HIROTO balik tampil di semua ukuran terminal
+- Test regresi: `frame height == terminal height` di 4 ukuran (120x40, 100x30, 80x24, 140x50)
+
 ## 0.6.0 — 2026-08-30
 
 Hermes-parity pass across the TUI and Telegram gateway.
