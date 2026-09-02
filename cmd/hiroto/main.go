@@ -93,6 +93,10 @@ type (
 	clarifyMsg struct {
 		req tools.ClarifyRequest
 	}
+	modelListMsg struct {
+		models []string
+		err    error
+	}
 )
 
 type model struct {
@@ -457,7 +461,22 @@ func waitForClarify() tea.Cmd {
 // ---------- bubbletea update ----------
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tea.SetWindowTitle("◆ hiroto"), textarea.Blink, m.spinner.Tick, waitForActivity(), waitForClarify())
+	return tea.Batch(tea.SetWindowTitle("◆ hiroto"), textarea.Blink, m.spinner.Tick, waitForActivity(), waitForClarify(), fetchModelsCmd(m.ag.Client))
+}
+
+// fetchModelsCmd fetches the model list from the API in the background and
+// delivers the result as a modelListMsg. The TUI boots immediately instead of
+// waiting up to 10s for a slow proxy.
+func fetchModelsCmd(client *llm.Client) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		models, err := client.ListModels(ctx)
+		if err != nil {
+			log.Printf("[hiroto] model list fetch: %v", err)
+		}
+		return modelListMsg{models: models, err: err}
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -474,6 +493,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.recalcViewport()
 		m.refresh()
+
+	case modelListMsg:
+		if msg.err == nil && len(msg.models) > 0 {
+			m.cfg.Model.Available = msg.models
+		}
+		// The picker falls back to [current model] when Available is nil,
+		// so no model-list is a cosmetic gap, not a blocker.
 
 	case tea.MouseMsg:
 		// Mouse wheel scrolls the transcript viewport (3 lines per notch).
@@ -1424,15 +1450,9 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 		RetryAttempts:     2,
 		Workdir:           workdir(),
 	}
-	// Fetch model list from API for the picker.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if models, err := ag.Client.ListModels(ctx); err == nil && len(models) > 0 {
-		cfg.Model.Available = models
-	} else if err != nil {
-		// Log but don't block — picker will fall back to live fetch.
-		log.Printf("[hiroto] model list fetch: %v", err)
-	}
+	// Model list is fetched asynchronously after the TUI boots (see
+	// fetchModelsCmd). The 10s timeout used to block startup so the
+	// user would stare at a blank screen while waiting for the proxy.
 	reg := tools.NewRegistry()
 	tools.RegisterBuiltin(reg, tools.Options{
 		TermTimeout: time.Duration(cfg.Agent.TermTimeout) * time.Second,
