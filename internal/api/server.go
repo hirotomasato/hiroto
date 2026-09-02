@@ -168,8 +168,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a shallow agent copy for this request.
+	// Create a shallow agent copy for this request, including the client
+	// so concurrent requests don't race on the shared model name.
 	ag := *s.ag
+	clientCopy := *s.ag.Client
+	ag.Client = &clientCopy
 	ag.Messages = messages
 
 	if req.Stream {
@@ -189,6 +192,7 @@ func (s *Server) handleBlocking(w http.ResponseWriter, r *http.Request, ag *agen
 	answer, err := ag.Run(ctx, userText, nil)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]any{
 			"error": map[string]string{"message": err.Error()},
 		})

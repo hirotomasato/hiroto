@@ -233,6 +233,8 @@ func (a *Agent) Run(ctx context.Context, userText string, onText func(string)) (
 			}
 			if onText != nil {
 				assistant, streamErr = a.Client.Stream(ctx, a.Messages, toolDefs, onText)
+			} else {
+				assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
 			}
 			if streamErr != nil {
 				select {
@@ -240,7 +242,11 @@ func (a *Agent) Run(ctx context.Context, userText string, onText func(string)) (
 					return final, ctx.Err()
 				default:
 				}
-				assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
+				// Stream failed; try Chat as a fallback (only when
+				// we were streaming — the else branch already did Chat).
+				if onText != nil {
+					assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
+				}
 				if streamErr != nil {
 					if attempt < a.RetryAttempts {
 						continue
@@ -395,6 +401,8 @@ func (a *Agent) continueRun(ctx context.Context, onText func(string)) (string, e
 			}
 			if onText != nil {
 				assistant, streamErr = a.Client.Stream(ctx, a.Messages, toolDefs, onText)
+			} else {
+				assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
 			}
 			if streamErr != nil {
 				select {
@@ -402,7 +410,10 @@ func (a *Agent) continueRun(ctx context.Context, onText func(string)) (string, e
 					return final, ctx.Err()
 				default:
 				}
-				assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
+				// Stream failed; try Chat as a fallback.
+				if onText != nil {
+					assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
+				}
 				if streamErr != nil {
 					if attempt < a.RetryAttempts {
 						continue
