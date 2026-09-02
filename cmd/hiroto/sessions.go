@@ -72,13 +72,14 @@ func (m *model) saveSession() {
 		return
 	}
 	sess := &session.Session{
-		ID:       m.sessID,
-		Title:    firstUserText(m.ag.Messages, 60),
-		Model:    m.ag.Client.Model,
-		Created:  time.Now(),
-		Updated:  time.Now(),
-		Messages: toStored(m.ag.Messages),
-		Todos:    todosToStored(m.todos),
+		ID:        m.sessID,
+		Title:     firstUserText(m.ag.Messages, 60),
+		Model:     m.ag.Client.Model,
+		Reasoning: m.reasoning,
+		Created:   time.Now(),
+		Updated:   time.Now(),
+		Messages:  toStored(m.ag.Messages),
+		Todos:     todosToStored(m.todos),
 	}
 	_ = m.sessStore.Save(sess)
 }
@@ -173,6 +174,10 @@ func (m *model) loadSessionByID(id string) bool {
 	m.sessID = sess.ID
 	if sess.Model != "" {
 		m.ag.Client.Model = sess.Model
+	}
+	if sess.Reasoning != "" {
+		m.reasoning = sess.Reasoning
+		m.ag.Reasoning = sess.Reasoning
 	}
 	restoreTodos(m.todos, sess)
 	m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})

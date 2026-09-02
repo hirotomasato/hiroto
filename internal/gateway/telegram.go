@@ -210,6 +210,7 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 			"/undo — batalkan giliran terakhir\n"+
 			"/stop — hentikan agent yang sedang jalan\n"+
 			"/compress — ringkas konteks percakapan\n"+
+			"/reasoning — set reasoning effort (low/medium/high)\n"+
 			"/status — info sesi & model\n"+
 			"/sessions [cari] — cari sesi\n"+
 			"/todo — lihat task, /todo done <id>, /todo unstick, /todo clear\n\n"+
@@ -272,6 +273,10 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 
 	case "/compress":
 		g.handleCompress(chatID, replyTo)
+		return
+
+	case "/reasoning":
+		g.handleReasoning(chatID, arg, replyTo)
 		return
 
 	case "/sessions":
@@ -338,11 +343,12 @@ func (g *gw) saveChat(st *chat) {
 	}
 	title := firstUserText(st.messages, 60)
 	sess := &session.Session{
-		ID:       st.id,
-		Title:    title,
-		Model:    g.ag.Client.Model,
-		Created:  time.Now(),
-		Updated:  time.Now(),
+		ID:        st.id,
+		Title:     title,
+		Model:     g.ag.Client.Model,
+		Reasoning: g.ag.Reasoning,
+		Created:   time.Now(),
+		Updated:   time.Now(),
 		Messages: toStored(st.messages),
 		Todos:    todosToStored(g.todos),
 	}
@@ -829,6 +835,27 @@ func (g *gw) handleCompress(chatID int64, replyTo int) {
 	st.messages = ag.Messages
 	g.saveChat(st)
 	send(g.bot, chatID, "✓ konteks diringkas", replyTo)
+}
+
+func (g *gw) handleReasoning(chatID int64, arg string, replyTo int) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		level := g.ag.Reasoning
+		if level == "" {
+			level = "(default)"
+		}
+		send(g.bot, chatID, "◆ reasoning: "+level+"\n\n/reasoning low | medium | high", replyTo)
+		return
+	}
+	arg = strings.ToLower(arg)
+	switch arg {
+	case "low", "medium", "high":
+	default:
+		send(g.bot, chatID, "❌ reasoning harus: low, medium, atau high", replyTo)
+		return
+	}
+	g.ag.Reasoning = arg
+	send(g.bot, chatID, "✓ reasoning: "+arg, replyTo)
 }
 
 // lastUserTurn holds the text of the last user message and how many messages

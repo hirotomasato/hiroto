@@ -1112,11 +1112,22 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render("◆ config\n" + b.String())})
 		case "/reasoning":
 			if len(fields) < 2 {
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + m.reasoning)})
+				level := m.reasoning
+				if level == "" {
+					level = "(default)"
+				}
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + level + " — /reasoning low | medium | high")})
 			} else {
-				m.reasoning = fields[1]
-				m.ag.Reasoning = m.reasoning
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + m.reasoning)})
+				level := strings.ToLower(fields[1])
+				switch level {
+				case "low", "medium", "high":
+				default:
+					m.lines = append(m.lines, line{lineError, stErr.Render("reasoning harus: low, medium, atau high")})
+					return m, nil
+				}
+				m.reasoning = level
+				m.ag.Reasoning = level
+				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + level)})
 			}
 		case "/review":
 			// Review the current git diff and provide feedback.

@@ -38,13 +38,14 @@ type StoredTodo struct {
 
 // Session is a saved conversation.
 type Session struct {
-	ID       string          `json:"id"`
-	Title    string          `json:"title"`
-	Model    string          `json:"model,omitempty"`
-	Created  time.Time       `json:"created"`
-	Updated  time.Time       `json:"updated"`
-	Messages []StoredMessage `json:"messages"`
-	Todos    []StoredTodo    `json:"todos,omitempty"`
+	ID        string          `json:"id"`
+	Title     string          `json:"title"`
+	Model     string          `json:"model,omitempty"`
+	Reasoning string          `json:"reasoning,omitempty"`
+	Created   time.Time       `json:"created"`
+	Updated   time.Time       `json:"updated"`
+	Messages  []StoredMessage `json:"messages"`
+	Todos     []StoredTodo    `json:"todos,omitempty"`
 }
 
 // Store manages the sessions directory.
