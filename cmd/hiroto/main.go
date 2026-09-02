@@ -1905,7 +1905,25 @@ func (m *model) handleRollback(fields []string) {
 			m.flashMsg("pakai: /rollback restore <hash>", "error")
 			return
 		}
-		hash := fields[2]
+		hash := strings.TrimSpace(fields[2])
+		// Basic hash validation: hex chars, 7-40 length.
+		if len(hash) < 7 || len(hash) > 40 {
+			m.flashMsg("hash tidak valid — harus 7-40 karakter hex", "error")
+			return
+		}
+		for _, c := range hash {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				m.flashMsg("hash tidak valid — hanya karakter hex (0-9, a-f)", "error")
+				return
+			}
+		}
+		// Check for uncommitted changes before destroying them.
+		status, _ := exec.Command("git", "-C", m.ag.Workdir, "status", "--porcelain").CombinedOutput()
+		if len(strings.TrimSpace(string(status))) > 0 {
+			m.lines = append(m.lines, line{lineInfo, stMuted.Render("⚠ ada perubahan belum di-commit — /rollback save dulu atau commit manual sebelum restore")})
+			m.refresh()
+			return
+		}
 		out, err := exec.Command("git", "-C", m.ag.Workdir, "reset", "--hard", hash).CombinedOutput()
 		if err != nil {
 			m.flashMsg("rollback gagal: "+string(out), "error")
