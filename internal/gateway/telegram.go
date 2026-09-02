@@ -798,7 +798,19 @@ func (g *gw) handleCompress(chatID int64, replyTo int) {
 		send(g.bot, chatID, "belum ada percakapan untuk diringkas", replyTo)
 		return
 	}
-	ag := g.ag
+	// Don't compress while a turn is running — the agent's Messages belong
+	// to the running goroutine. Use the same shallow-copy pattern as
+	// runAgentTurn to keep the shared state untouched.
+	g.cancMu.Lock()
+	_, running := g.cancels[chatID]
+	g.cancMu.Unlock()
+	if running {
+		send(g.bot, chatID, "agent sedang sibuk — /stop dulu", replyTo)
+		return
+	}
+	ag := *g.ag
+	clientCopy := *g.ag.Client
+	ag.Client = &clientCopy
 	ag.Messages = st.messages
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
