@@ -29,6 +29,7 @@ import (
 // It is bound to a stable session ID so the conversation survives restarts.
 type chat struct {
 	id       string
+	mu       sync.Mutex // protects messages during agent turns (steer)
 	messages []llm.Message
 }
 
@@ -63,16 +64,18 @@ func (o Options) progressMode() string {
 
 // gw holds the bot runtime state shared across all chats.
 type gw struct {
-	bot     *tgbotapi.BotAPI
-	ag      *agent.Agent
-	mem     *memory.Store
-	sess    *session.Store
-	todos   *tools.TodoStore // shared with the todo tool; retargeted per chat turn
-	chats   map[int64]*chat
-	cancels map[int64]context.CancelFunc // per-chat cancel for /stop
-	cancMu  sync.Mutex
-	opts    Options
-	allowed map[int64]bool // Telegram user IDs permitted to use the bot
+	bot      *tgbotapi.BotAPI
+	ag       *agent.Agent
+	mem      *memory.Store
+	sess     *session.Store
+	todos    *tools.TodoStore // shared with the todo tool; retargeted per chat turn
+	chats    map[int64]*chat
+	cancels  map[int64]context.CancelFunc // per-chat cancel for /stop
+	cancMu   sync.Mutex
+	steerChs map[int64]chan string // per-chat steer channel when agent is running
+	steerMu  sync.Mutex
+	opts     Options
+	allowed  map[int64]bool // Telegram user IDs permitted to use the bot
 }
 
 // isAllowed reports whether a Telegram user may use the bot. An empty allowlist
@@ -121,15 +124,16 @@ func Telegram(token string, ag *agent.Agent, opts Options) error {
 		mem = memory.New()
 	}
 	g := &gw{
-		bot:     bot,
-		ag:      ag,
-		mem:     mem,
-		sess:    session.New(),
-		todos:   tools.SharedTodo(),
-		chats:   make(map[int64]*chat),
-		cancels: make(map[int64]context.CancelFunc),
-		opts:    opts,
-		allowed: make(map[int64]bool),
+		bot:      bot,
+		ag:       ag,
+		mem:      mem,
+		sess:     session.New(),
+		todos:    tools.SharedTodo(),
+		chats:    make(map[int64]*chat),
+		cancels:  make(map[int64]context.CancelFunc),
+		steerChs: make(map[int64]chan string),
+		opts:     opts,
+		allowed:  make(map[int64]bool),
 	}
 	for _, id := range opts.AllowedUsers {
 		g.allowed[id] = true
@@ -181,7 +185,8 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 	switch cmd {
 	case "/start":
 		send(g.bot, chatID, "◆ Hiroto — personal AI agent\n\n"+
-			"Kirim pesan untuk bertanya atau memberi tugas.\n\n"+
+			"Kirim pesan untuk bertanya atau memberi tugas.\n"+
+			"Kirim pesan saat agent bekerja untuk mengarahkan (steer).\n\n"+
 			"/new — mulai sesi baru\n"+
 			"/model — lihat & pilih model\n"+
 			"/resume — lanjut sesi tersimpan\n"+
@@ -207,10 +212,18 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 			"/compress — ringkas konteks percakapan\n"+
 			"/status — info sesi & model\n"+
 			"/sessions [cari] — cari sesi\n"+
-			"/todo — lihat task, /todo done <id>, /todo unstick, /todo clear", replyTo)
+			"/todo — lihat task, /todo done <id>, /todo unstick, /todo clear\n\n"+
+			"Kirim pesan biasa saat agent bekerja untuk mengarahkan (steer).", replyTo)
 		return
 
 	case "/new":
+		// Cancel any running turn before resetting the chat.
+		g.cancMu.Lock()
+		if cancel, ok := g.cancels[chatID]; ok {
+			cancel()
+			delete(g.cancels, chatID)
+		}
+		g.cancMu.Unlock()
 		delete(g.chats, chatID)
 		// A new conversation gets a clean plan (the id is chat-stable, so the
 		// old checklist file would otherwise be inherited).
@@ -275,6 +288,28 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 	}
 
 	// ---- free-form message -> agent ----
+	// If the agent is already running for this chat, inject the text as an
+	// out-of-band steer (same as Hermes CLI — the user can chat while the
+	// agent works). Otherwise start a new turn.
+	g.cancMu.Lock()
+	_, running := g.cancels[chatID]
+	g.cancMu.Unlock()
+
+	if running {
+		g.steerMu.Lock()
+		ch := g.steerChs[chatID]
+		g.steerMu.Unlock()
+		if ch != nil {
+			select {
+			case ch <- text:
+				send(g.bot, chatID, "⚡ steer: "+truncate(text, 80), replyTo)
+			default:
+				send(g.bot, chatID, "agent sedang sibuk — coba lagi", replyTo)
+			}
+		}
+		return
+	}
+
 	st, ok := g.chats[chatID]
 	if !ok {
 		st = &chat{id: sessionIDFor(chatID)}
@@ -284,7 +319,9 @@ func (g *gw) handle(msg *tgbotapi.Message) {
 		}
 		g.chats[chatID] = st
 	}
-	g.runAgentTurn(chatID, st, text, replyTo)
+	// Run the turn in a background goroutine so the gateway can still
+	// process incoming messages (steering) while the agent works.
+	go g.runAgentTurn(chatID, st, text, replyTo)
 }
 
 // saveChat persists this chat's conversation under its stable session id so
@@ -558,13 +595,21 @@ func (g *gw) handleRetry(chatID int64, replyTo int) {
 		send(g.bot, chatID, "belum ada percakapan untuk diulang", replyTo)
 		return
 	}
+	// Don't retry while a turn is already running.
+	g.cancMu.Lock()
+	_, running := g.cancels[chatID]
+	g.cancMu.Unlock()
+	if running {
+		send(g.bot, chatID, "agent sedang sibuk — /stop dulu", replyTo)
+		return
+	}
 	userText, ok := popLastUserTurn(st.messages)
 	if !ok {
 		send(g.bot, chatID, "tidak ada giliran user untuk diulang", replyTo)
 		return
 	}
 	st.messages = st.messages[:len(st.messages)-userText.removed]
-	g.runAgentTurn(chatID, st, userText.text, replyTo)
+	go g.runAgentTurn(chatID, st, userText.text, replyTo)
 }
 
 func (g *gw) handleUndo(chatID int64, replyTo int) {
@@ -638,7 +683,12 @@ func (g *gw) handleSessions(chatID int64, arg string, replyTo int) {
 
 // runAgentTurn runs the agent for a single user turn and streams the result.
 // It is shared between handle (free-form messages) and handleRetry.
+// It runs in its own goroutine so the gateway can accept steer messages
+// (out-of-band chat) while the agent works — same as Hermes CLI.
 func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
 	log.Printf("[gateway] %s", text)
 	if g.opts.TypingIndicator {
 		typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
@@ -650,6 +700,19 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	// Bind the checklist to this chat's session before the agent can call the
 	// todo tool, so chats never write into each other's plan.
 	g.bindTodos(chatID)
+
+	// Steer channel: the user can send messages while the agent works.
+	// handle() writes to this channel; the agent reads it between tool calls.
+	steerCh := make(chan string, 1)
+	g.steerMu.Lock()
+	g.steerChs[chatID] = steerCh
+	g.steerMu.Unlock()
+	ag.SteerCh = steerCh
+	defer func() {
+		g.steerMu.Lock()
+		delete(g.steerChs, chatID)
+		g.steerMu.Unlock()
+	}()
 
 	live := newLive(g.bot, chatID)
 	live.cleanup = g.opts.CleanupProgress
@@ -683,6 +746,7 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	delete(g.cancels, chatID)
 	g.cancMu.Unlock()
 	ag.Emit = nil
+	ag.SteerCh = nil
 	st.messages = ag.Messages
 
 	if err != nil {

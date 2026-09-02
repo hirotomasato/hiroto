@@ -390,6 +390,7 @@ func minInt(a, b int) int {
 
 func (m *model) runTurn(text string) {
 	m.busy = true
+	m.input.Placeholder = "agent sibuk — ketik untuk mengarahkan…"
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	// Steer channel: buffer of 1 so /steer doesn't block.
@@ -584,11 +585,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			text := strings.TrimSpace(m.input.Value())
-			if text == "" || m.busy {
-				return m, nil
-			}
-			m.clearFlash()
-			return m.handleSubmit(text)
+		if text == "" {
+			return m, nil
+		}
+		if m.busy {
+			// Agent is working — the user can still type, and Enter
+			// delivers the text as an out-of-band /steer, just like
+			// Hermes CLI. The agent picks it up on its next tool-call
+			// boundary and adjusts course.
+			m.sendSteer(text)
+			m.input.SetValue("")
+			m.input.Placeholder = "agent sibuk — ketik untuk mengarahkan…"
+			m.refresh()
+			return m, nil
+		}
+		m.clearFlash()
+		return m.handleSubmit(text)
 		case tea.KeyUp:
 			if len(m.history) > 0 && m.histIdx < len(m.history)-1 {
 				m.histIdx++
@@ -653,6 +665,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case assistantDoneMsg:
 		m.busy = false
 		m.streaming = false
+		m.input.Placeholder = "ketik pesan untuk hiroto…"
 		m.endAssistantLine()
 		// A failed/cancelled run leaves no one working: demote in_progress so
 		// the panel doesn't claim a task is still running. On success, warn
@@ -765,6 +778,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Viewport no longer handles keys — we do it explicitly via PgUp/Dn/Home/End.
 	cmds = append(cmds, c1, c2)
 	return m, tea.Batch(cmds...)
+}
+
+// sendSteer injects an out-of-band message into the running agent's SteerCh.
+// If the user explicitly typed "/steer" we strip it; the agent already knows
+// this is a steering instruction. If the channel is full the message is
+// silently dropped (the user sees a flash).
+func (m *model) sendSteer(text string) {
+	msg := text
+	if strings.HasPrefix(strings.ToLower(text), "/steer ") {
+		msg = strings.TrimSpace(text[len("/steer "):])
+	}
+	if m.steerCh == nil {
+		m.flashMsg("steer: channel tidak tersedia", "error")
+		return
+	}
+	select {
+	case m.steerCh <- msg:
+		m.lines = append(m.lines, line{lineInfo, stMuted.Render("steer: " + msg)})
+	default:
+		m.flashMsg("steer: channel penuh, coba lagi", "error")
+	}
 }
 
 func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {

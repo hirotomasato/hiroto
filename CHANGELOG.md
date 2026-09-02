@@ -22,6 +22,12 @@
 - Garis rule atas di atas wordmark HIROTO balik tampil di semua ukuran terminal
 - Test regresi: `frame height == terminal height` di 4 ukuran (120x40, 100x30, 80x24, 140x50)
 
+### Steer (mid-turn chat)
+- TUI: input tetap bisa diketik saat agent bekerja — Enter auto jadi `/steer`, placeholder berubah
+- Gateway Telegram: turn dijalankan di goroutine terpisah, pesan yang masuk saat agent bekerja auto di-inject sebagai steer ke agent
+- `/stop` dan `/new` membatalkan turn yang sedang berjalan
+- `/retry` dicegah saat turn masih aktif
+
 ## 0.6.0 — 2026-08-30
 
 Hermes-parity pass across the TUI and Telegram gateway.
