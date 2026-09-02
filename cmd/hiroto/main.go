@@ -395,6 +395,10 @@ func minInt(a, b int) int {
 func (m *model) runTurn(text string) {
 	m.busy = true
 	m.input.Placeholder = "agent sibuk — ketik untuk mengarahkan…"
+	// Save the conversation before the turn starts. If the agent crashes
+	// mid-turn, the user only loses the current turn's output, not the
+	// entire conversation.
+	m.saveSession()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	// Steer channel: buffer of 1 so /steer doesn't block.
@@ -684,6 +688,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case "tool_start", "tool_end", "error", "compress_start", "compress_end":
 			m.lines = append(m.lines, m.renderAgentEvent(msg))
+		}
+		// Snapshot the session after each tool completes or error
+		// so a crash mid-turn only loses the current operation's
+		// output, not all progress since the turn started.
+		if msg.Type == "tool_end" || msg.Type == "error" {
+			m.saveSession()
 		}
 		m.refresh()
 		cmds = append(cmds, waitForActivity())

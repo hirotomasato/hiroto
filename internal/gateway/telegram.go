@@ -708,6 +708,10 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 	// todo tool, so chats never write into each other's plan.
 	g.bindTodos(chatID)
 
+	// Save before the turn starts. If the agent crashes mid-turn, the
+	// user only loses the current turn's output, not the whole chat.
+	g.saveChat(st)
+
 	// Steer channel: the user can send messages while the agent works.
 	// handle() writes to this channel; the agent reads it between tool calls.
 	steerCh := make(chan string, 1)
@@ -736,10 +740,14 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 				return // "new" shows only start lines
 			}
 			live.push("  ✓ " + agent.ActivityLabel(e.ToolName, e.ToolArgs) + " (" + e.Duration.Round(100*time.Millisecond).String() + ")")
+			// Snapshot after each tool so a crash only loses the
+			// current tool's output, not the whole chat.
+			g.saveChat(st)
 		case "compress_start", "compress_end":
 			live.push("⚡ " + e.Text)
 		case "error":
 			live.push("  ✗ " + e.Text)
+			g.saveChat(st)
 		}
 	}
 
