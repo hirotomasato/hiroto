@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type Entry struct {
 // Store keeps entries as one JSON file per target (simple, greppable, portable).
 type Store struct {
 	Dir string
+	mu  sync.Mutex
 }
 
 func New() *Store {
@@ -49,6 +51,8 @@ func (s *Store) ListEntries(target string) []Entry {
 }
 
 func (s *Store) Add(target, content string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	entries := s.ListEntries(target)
 	e := Entry{ID: nextID(entries), Target: target, Content: strings.TrimSpace(content), Created: time.Now()}
 	entries = append(entries, e)
@@ -57,6 +61,8 @@ func (s *Store) Add(target, content string) string {
 }
 
 func (s *Store) Remove(target, idOrText string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	entries := s.ListEntries(target)
 	kept := entries[:0]
 	removed := false

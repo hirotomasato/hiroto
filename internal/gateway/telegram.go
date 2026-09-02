@@ -695,7 +695,14 @@ func (g *gw) runAgentTurn(chatID int64, st *chat, text string, replyTo int) {
 		g.bot.Send(typing)
 	}
 
-	ag := g.ag
+	// Shallow-copy the shared agent so per-turn fields (Messages, Emit,
+	// SteerCh) are isolated. Two concurrent turns from different chats
+	// would otherwise overwrite each other's state.
+	// Also copy the client so a /model switch mid-turn doesn't change
+	// the model name out from under a running request.
+	ag := *g.ag
+	clientCopy := *g.ag.Client
+	ag.Client = &clientCopy
 	ag.Messages = st.messages
 	// Bind the checklist to this chat's session before the agent can call the
 	// todo tool, so chats never write into each other's plan.
