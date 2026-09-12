@@ -80,6 +80,11 @@ const (
 type line struct {
 	kind lineKind
 	text string
+	// mdRendered is true once markdown styling has been applied. Assistant
+	// lines are styled lazily: while streaming they stay raw (cheap append),
+	// and glamour runs once in endAssistantLine(). A resize resets them so
+	// re-wrap happens at the new width.
+	mdRendered bool
 }
 
 type (
@@ -183,7 +188,7 @@ func (m *model) banner() {
 		w = 80
 	}
 	for _, ln := range bannerLines(w, m.cfg.Model.Name, len(m.ag.Skills)) {
-		m.lines = append(m.lines, line{lineInfo, ln})
+		m.lines = append(m.lines, line{kind: lineInfo, text: ln})
 	}
 	// Check for updates on startup
 	go func() {
@@ -198,22 +203,22 @@ func (m *model) banner() {
 func (m *model) renderAgentEvent(e agent.Event) line {
 	switch e.Type {
 	case "tool_start":
-		return line{lineTool, stToolTag.Render("⚒ "+toolActivity(e.ToolName, e.ToolArgs)) + stMuted.Render(" …")}
+		return line{kind: lineTool, text: stToolTag.Render("⚒ "+toolActivity(e.ToolName, e.ToolArgs)) + stMuted.Render(" …")}
 	case "tool_end":
 		head := stToolTag.Render("✓ "+toolActivity(e.ToolName, e.ToolArgs)) + stMuted.Render(fmt.Sprintf(" (%.1fs)", e.Duration.Seconds()))
 		body := e.Text
 		// Diff-bearing output (patch/write_file) is colorized and shown in
 		// full up to a cap — never compacted, since the diff IS the signal.
 		if hasDiff(body) {
-			return line{lineTool, head + "\n" + indent(colorizeDiff(body), "  ")}
+			return line{kind: lineTool, text: head + "\n" + indent(colorizeDiff(body), "  ")}
 		}
-		return line{lineTool, head + "\n" + m.renderToolBody(body)}
+		return line{kind: lineTool, text: head + "\n" + m.renderToolBody(body)}
 	case "compress_start", "compress_end":
-		return line{lineInfo, stMuted.Render("⚡ " + e.Text)}
+		return line{kind: lineInfo, text: stMuted.Render("⚡ " + e.Text)}
 	case "error":
-		return line{lineError, stErr.Render("✗ " + e.Text)}
+		return line{kind: lineError, text: stErr.Render("✗ " + e.Text)}
 	}
-	return line{lineInfo, e.Text}
+	return line{kind: lineInfo, text: e.Text}
 }
 
 func indent(s, pad string) string {
@@ -495,6 +500,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.input.SetWidth(msg.Width)
 		}
+		// Wrap width changed — force assistant lines to re-render markdown
+		// at the new width on their next refresh.
+		if mdWidth != msg.Width-2 {
+			for i := range m.lines {
+				m.lines[i].mdRendered = false
+			}
+		}
 		m.recalcViewport()
 		m.refresh()
 
@@ -573,12 +585,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// in the panel forever, so hand it back to pending.
 				if m.todos != nil {
 					if n := m.todos.Demote(); n > 0 {
-						m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("(dibatalkan — %d task → pending)", n))})
+						m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("(dibatalkan — %d task → pending)", n))})
 					} else {
-						m.lines = append(m.lines, line{lineInfo, stMuted.Render("(dibatalkan)")})
+						m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("(dibatalkan)")})
 					}
 				} else {
-					m.lines = append(m.lines, line{lineInfo, stMuted.Render("(dibatalkan)")})
+					m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("(dibatalkan)")})
 				}
 				m.refresh()
 				return m, nil
@@ -673,7 +685,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case tea.KeyCtrlS:
 			m.saveSession()
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi disimpan")})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("sesi disimpan")})
 			m.refresh()
 			return m, nil
 		}
@@ -714,10 +726,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.todos.ReloadIfChanged()
 			if msg.failed {
 				if n := m.todos.Demote(); n > 0 {
-					m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("%d task in_progress → pending (run gagal)", n))})
+					m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("%d task in_progress → pending (run gagal)", n))})
 				}
 			} else if stuck := m.stuckTodos(); stuck != "" {
-				m.lines = append(m.lines, line{lineInfo, stHelp.Render("task masih in_progress: " + stuck + " — /todo done <id> atau /todo unstick")})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stHelp.Render("task masih in_progress: " + stuck + " — /todo done <id> atau /todo unstick")})
 			}
 		}
 		m.saveSession()
@@ -835,7 +847,7 @@ func (m *model) sendSteer(text string) {
 	}
 	select {
 	case m.steerCh <- msg:
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render("steer: " + msg)})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("steer: " + msg)})
 	default:
 		m.flashMsg("steer: channel penuh, coba lagi", "error")
 	}
@@ -850,7 +862,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		switch fields := strings.Fields(text); fields[0] {
 		case "/help":
 			m.lines = append(m.lines,
-				line{lineInfo, stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo [add|done <id>|undo <id>|unstick|clear] /quit")},
+				line{kind: lineInfo, text: stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo [add|done <id>|undo <id>|unstick|clear] /quit")},
 			)
 		case "/quit", "/exit":
 			m.saveSession()
@@ -864,22 +876,22 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			if m.todos != nil {
 				m.todos.Retarget(m.sessID)
 			}
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("— sesi baru —")})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("— sesi baru —")})
 		case "/resume":
 			m.openResumePicker()
 		case "/compress":
 			if err := m.ag.CompressNow(context.Background()); err != nil {
-				m.lines = append(m.lines, line{lineError, stErr.Render("kompresi: " + err.Error())})
+				m.lines = append(m.lines, line{kind: lineError, text: stErr.Render("kompresi: " + err.Error())})
 			}
 		case "/update":
 			latest, ok := checkUpdate()
 			if ok {
-				m.lines = append(m.lines, line{lineInfo, stBanner.Render("◆ update tersedia: v" + latest + " — ketik /upgrade untuk install")})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stBanner.Render("◆ update tersedia: v" + latest + " — ketik /upgrade untuk install")})
 			} else {
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("hiroto v" + version + " — versi terbaru")})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("hiroto v" + version + " — versi terbaru")})
 			}
 		case "/upgrade":
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("mengupdate hiroto…")})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("mengupdate hiroto…")})
 			m.refresh()
 			go func() {
 				out, err := doUpdate()
@@ -905,7 +917,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			if len(fields) >= 2 {
 				m.cfg.Model.Name = fields[1]
 				m.ag.Client.SetModel(fields[1])
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("model sesi ini: " + fields[1] + " (permanen: edit model: di ~/.hiroto/config.yaml)")})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("model sesi ini: " + fields[1] + " (permanen: edit model: di ~/.hiroto/config.yaml)")})
 			} else {
 				m.openModelPicker()
 			}
@@ -914,17 +926,17 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				content := strings.TrimSpace(strings.TrimPrefix(text, "/memory add"))
 				if content != "" {
 					id := m.mem.Add("memory", content)
-					m.lines = append(m.lines, line{lineInfo, stMuted.Render("memory tersimpan: " + id)})
+					m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("memory tersimpan: " + id)})
 				}
 			} else if len(fields) >= 3 && fields[1] == "del" {
 				ok := m.mem.Remove("memory", fields[2])
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("hapus: %v", ok))})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("hapus: %v", ok))})
 			} else {
 				block := m.mem.PromptBlock()
 				if block == "" {
 					block = "(kosong)"
 				}
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render(block)})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(block)})
 			}
 		case "/todo":
 			m.handleTodoCmd(fields)
@@ -938,10 +950,10 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			if text == "" {
 				text = "(tidak ada perubahan)"
 			}
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render(text)})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(text)})
 		case "/stop":
 			n := tools.KillAll()
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("mematikan %d proses background", n))})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("mematikan %d proses background", n))})
 		case "/steer":
 			if len(fields) < 2 {
 				m.flashMsg("pakai: /steer <pesan>", "error")
@@ -949,7 +961,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				msg := strings.Join(fields[1:], " ")
 				select {
 				case m.steerCh <- msg:
-					m.lines = append(m.lines, line{lineInfo, stMuted.Render("steer: " + msg)})
+					m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("steer: " + msg)})
 				default:
 					m.flashMsg("steer: channel penuh, coba lagi", "error")
 				}
@@ -959,10 +971,10 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		case "/verbose":
 			m.verbose = (m.verbose + 1) % 3
 			labels := []string{"compact", "full", "log"}
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("verbose: " + labels[m.verbose])})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("verbose: " + labels[m.verbose])})
 		case "/usage":
 			tokens := estimateTokens(m.ag.Messages)
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("~%d token · %d pesan · %d turn", tokens, len(m.ag.Messages), countUserTurns(m.ag.Messages)))})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("~%d token · %d pesan · %d turn", tokens, len(m.ag.Messages), countUserTurns(m.ag.Messages)))})
 		case "/rollback":
 			m.handleRollback(fields)
 		case "/prompt":
@@ -992,7 +1004,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				m.flashMsg("pakai: /bg <prompt>", "error")
 			} else {
 				bgText := strings.Join(fields[1:], " ")
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("background: " + truncateStr(bgText, 80))})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("background: " + truncateStr(bgText, 80))})
 				m.refresh()
 				go func() {
 					ag2 := m.ag // shallow copy — same client, separate messages
@@ -1011,11 +1023,11 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			}
 		case "/goal":
 			if len(fields) < 2 {
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("goal: " + m.goal)})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("goal: " + m.goal)})
 			} else {
 				m.goal = strings.Join(fields[1:], " ")
 				m.ag.Goal = m.goal
-				m.lines = append(m.lines, line{lineInfo, stBanner.Render("◆ goal: " + m.goal)})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stBanner.Render("◆ goal: " + m.goal)})
 			}
 		case "/branch":
 			m.saveSession()
@@ -1030,7 +1042,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 					m.todos.Save(items)
 				}
 			}
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("branch: %s → %s", oldID, m.sessID))})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("branch: %s → %s", oldID, m.sessID))})
 		case "/copy":
 			// Copy last assistant response to clipboard.
 			last := ""
@@ -1061,12 +1073,12 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.saveSession()
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi: " + m.sessID)})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("sesi: " + m.sessID)})
 			}
 		case "/reload":
 			// Re-scan skills directory.
 			m.ag.Skills = skills.Discover(m.cfg.Skills.Dirs)
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("reload: %d skill", len(m.ag.Skills)))})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("reload: %d skill", len(m.ag.Skills)))})
 		case "/image":
 			if len(fields) < 2 {
 				m.flashMsg("pakai: /image <path>", "error")
@@ -1089,8 +1101,8 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 						mime = "image/webp"
 					}
 					dataURL := "data:" + mime + ";base64," + b64
-					m.lines = append(m.lines, line{lineUser, "[image: " + imgPath + "]"})
-					m.lines = append(m.lines, line{lineAssistant, ""})
+					m.lines = append(m.lines, line{kind: lineUser, text: "[image: " + imgPath + "]"})
+					m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 					m.input.Reset()
 					m.busy = true
 					m.streaming = false
@@ -1112,30 +1124,30 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			b.WriteString(fmt.Sprintf("base_url: %s\n", cfg.Model.BaseURL))
 			b.WriteString(fmt.Sprintf("max_turns: %d\n", cfg.Agent.MaxTurns))
 			b.WriteString(fmt.Sprintf("skills: %d\n", len(m.ag.Skills)))
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("◆ config\n" + b.String())})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("◆ config\n" + b.String())})
 		case "/reasoning":
 			if len(fields) < 2 {
 				level := m.reasoning
 				if level == "" {
 					level = "(default)"
 				}
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + level + " — /reasoning low | medium | high")})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("reasoning: " + level + " — /reasoning low | medium | high")})
 			} else {
 				level := strings.ToLower(fields[1])
 				switch level {
 				case "low", "medium", "high":
 				default:
-					m.lines = append(m.lines, line{lineError, stErr.Render("reasoning harus: low, medium, atau high")})
+					m.lines = append(m.lines, line{kind: lineError, text: stErr.Render("reasoning harus: low, medium, atau high")})
 					return m, nil
 				}
 				m.reasoning = level
 				m.ag.Reasoning = level
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("reasoning: " + level)})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("reasoning: " + level)})
 			}
 		case "/review":
 			// Review the current git diff and provide feedback.
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("reviewing changes…")})
-			m.lines = append(m.lines, line{lineAssistant, ""})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("reviewing changes…")})
+			m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 			m.input.Reset()
 			m.busy = true
 			m.streaming = false
@@ -1150,8 +1162,8 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		case "/explain":
 			if len(fields) < 2 {
 				// Explain the current codebase structure.
-				m.lines = append(m.lines, line{lineInfo, stMuted.Render("explaining codebase…")})
-				m.lines = append(m.lines, line{lineAssistant, ""})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("explaining codebase…")})
+				m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 				m.input.Reset()
 				m.busy = true
 				m.streaming = false
@@ -1159,8 +1171,8 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				m.runTurn("Explain the architecture and structure of this codebase. What are the main packages, their responsibilities, and how they connect?")
 			} else {
 				target := strings.Join(fields[1:], " ")
-				m.lines = append(m.lines, line{lineUser, "/explain " + target})
-				m.lines = append(m.lines, line{lineAssistant, ""})
+				m.lines = append(m.lines, line{kind: lineUser, text: "/explain " + target})
+				m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 				m.input.Reset()
 				m.busy = true
 				m.streaming = false
@@ -1168,8 +1180,8 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 				m.runTurn("Explain this code: " + target + ". What does it do, how does it work, and what are the key patterns?")
 			}
 		case "/test":
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("running tests…")})
-			m.lines = append(m.lines, line{lineAssistant, ""})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("running tests…")})
+			m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 			m.input.Reset()
 			m.busy = true
 			m.streaming = false
@@ -1187,8 +1199,8 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 	m.history = append(m.history, text)
 	m.histIdx = -1
 	m.streaming = false
-	m.lines = append(m.lines, line{lineUser, text})
-	m.lines = append(m.lines, line{lineAssistant, ""})
+	m.lines = append(m.lines, line{kind: lineUser, text: text})
+	m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 	m.input.Reset()
 	m.busy = true
 	m.refresh()
@@ -1201,7 +1213,7 @@ const streamPrefixLen = 1
 
 func (m *model) appendStream(chunk string) {
 	if len(m.lines) == 0 || m.lines[len(m.lines)-1].kind != lineAssistant {
-		m.lines = append(m.lines, line{lineAssistant, ""})
+		m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 	}
 	l := &m.lines[len(m.lines)-1]
 	l.text += chunk
@@ -1211,7 +1223,18 @@ func (m *model) endAssistantLine() {
 	if len(m.lines) > 0 && m.lines[len(m.lines)-1].kind == lineAssistant && m.lines[len(m.lines)-1].text == "" {
 		m.lines = m.lines[:len(m.lines)-1]
 	}
-	m.lines = append(m.lines, line{lineInfo, ""})
+	// Finalize the finished assistant line: this is the single style pass
+	// per turn (OMP parity — raw while streaming, styled once complete).
+	if len(m.lines) > 0 {
+		l := &m.lines[len(m.lines)-1]
+		if l.kind == lineAssistant && !l.mdRendered && strings.TrimSpace(l.text) != "" {
+			if rendered, err := mdRendererW(m.width - 2).Render(l.text); err == nil {
+				l.text = strings.TrimRight(rendered, "\n")
+				l.mdRendered = true
+			}
+		}
+	}
+	m.lines = append(m.lines, line{kind: lineInfo, text: ""})
 }
 
 // recalcViewport sizes the transcript viewport to leave room for the input,
@@ -1238,7 +1261,8 @@ func (m *model) recalcViewport() {
 
 func (m *model) refresh() {
 	var b strings.Builder
-	for _, ln := range m.lines {
+	for i := range m.lines {
+		ln := &m.lines[i]
 		text := ln.text
 		switch ln.kind {
 		case lineUser:
@@ -1249,11 +1273,15 @@ func (m *model) refresh() {
 			if strings.TrimSpace(text) == "" {
 				continue // streaming placeholder — nothing to show yet
 			}
-			// Render markdown on the RAW body only: never feed styled text
-			// (embedded ANSI) through glamour — its writer can split escape
-			// sequences and leak fragments like [1;38;2;…m as literal text.
-			if rendered, err := mdRendererW(m.width - 2).Render(text); err == nil {
-				text = strings.TrimRight(rendered, "\n")
+			// Streaming lines stay raw (mdRendered=false) — glamour on
+			// every chunk was the main render hotspot. The style pass
+			// happens once in endAssistantLine().
+			if !ln.mdRendered {
+				if rendered, err := mdRendererW(m.width - 2).Render(text); err == nil {
+					text = strings.TrimRight(rendered, "\n")
+					ln.mdRendered = true
+					ln.text = text
+				}
 			}
 			text = stAsstTag.Render("hiroto ◆ ") + text
 		}
@@ -1775,7 +1803,7 @@ func renderCmdPicker(items []string, cursor int, fresh bool) string {
 func (m *model) handleRetry() {
 	text, ok := popLastUserMsg(m.ag.Messages)
 	if !ok {
-		m.lines = append(m.lines, line{lineError, stErr.Render("tidak ada giliran user untuk diulang")})
+		m.lines = append(m.lines, line{kind: lineError, text: stErr.Render("tidak ada giliran user untuk diulang")})
 		m.refresh()
 		return
 	}
@@ -1783,8 +1811,8 @@ func (m *model) handleRetry() {
 	m.removeLastUserTurn()
 	// Remove the corresponding display lines.
 	m.stripLastUserTurnLines()
-	m.lines = append(m.lines, line{lineInfo, stMuted.Render("retry: " + truncateStr(text, 80))})
-	m.lines = append(m.lines, line{lineAssistant, ""})
+	m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("retry: " + truncateStr(text, 80))})
+	m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
 	m.input.Reset()
 	m.busy = true
 	m.streaming = false
@@ -1795,13 +1823,13 @@ func (m *model) handleRetry() {
 func (m *model) handleUndo() {
 	text, ok := popLastUserMsg(m.ag.Messages)
 	if !ok {
-		m.lines = append(m.lines, line{lineError, stErr.Render("tidak ada giliran user untuk dibatalkan")})
+		m.lines = append(m.lines, line{kind: lineError, text: stErr.Render("tidak ada giliran user untuk dibatalkan")})
 		m.refresh()
 		return
 	}
 	m.removeLastUserTurn()
 	m.stripLastUserTurnLines()
-	m.lines = append(m.lines, line{lineInfo, stMuted.Render("undo: " + truncateStr(text, 80))})
+	m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("undo: " + truncateStr(text, 80))})
 	m.refresh()
 }
 
@@ -1851,7 +1879,7 @@ func (m *model) handleRollback(fields []string) {
 		if text == "" {
 			text = "(belum ada checkpoint — ketik /rollback save untuk buat)"
 		}
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render("◆ rollback checkpoints\n" + text)})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("◆ rollback checkpoints\n" + text)})
 		m.refresh()
 		return
 	}
@@ -1870,9 +1898,9 @@ func (m *model) handleRollback(fields []string) {
 		}
 		// Exit code 1 = nothing to commit (not an error).
 		if exit == 1 {
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("tidak ada perubahan untuk di-checkpoint")})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("tidak ada perubahan untuk di-checkpoint")})
 		} else {
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("checkpoint: " + strings.TrimSpace(string(out)))})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("checkpoint: " + strings.TrimSpace(string(out)))})
 		}
 	case "restore":
 		if len(fields) < 3 {
@@ -1894,7 +1922,7 @@ func (m *model) handleRollback(fields []string) {
 		// Check for uncommitted changes before destroying them.
 		status, _ := exec.Command("git", "-C", m.ag.Workdir, "status", "--porcelain").CombinedOutput()
 		if len(strings.TrimSpace(string(status))) > 0 {
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("⚠ ada perubahan belum di-commit — /rollback save dulu atau commit manual sebelum restore")})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("⚠ ada perubahan belum di-commit — /rollback save dulu atau commit manual sebelum restore")})
 			m.refresh()
 			return
 		}
@@ -1902,7 +1930,7 @@ func (m *model) handleRollback(fields []string) {
 		if err != nil {
 			m.flashMsg("rollback gagal: "+string(out), "error")
 		} else {
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("rollback ke " + hash + " — file dikembalikan")})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("rollback ke " + hash + " — file dikembalikan")})
 		}
 	default:
 		m.flashMsg("pakai: /rollback [save|restore <hash>]", "error")

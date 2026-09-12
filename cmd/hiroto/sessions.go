@@ -153,7 +153,7 @@ func sessionDisplay(list []session.Session) (display, ids []string) {
 func (m *model) openResumePicker() {
 	list := m.sessStore.List()
 	if len(list) == 0 {
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render("belum ada sesi tersimpan")})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("belum ada sesi tersimpan")})
 		return
 	}
 	display, ids := sessionDisplay(list)
@@ -166,7 +166,7 @@ func (m *model) openResumePicker() {
 func (m *model) loadSessionByID(id string) bool {
 	sess, err := m.sessStore.Load(id)
 	if err != nil {
-		m.lines = append(m.lines, line{lineError, stErr.Render("gagal memuat sesi: " + err.Error())})
+		m.lines = append(m.lines, line{kind: lineError, text: stErr.Render("gagal memuat sesi: " + err.Error())})
 		m.refresh()
 		return false
 	}
@@ -180,9 +180,9 @@ func (m *model) loadSessionByID(id string) bool {
 		m.ag.Reasoning = sess.Reasoning
 	}
 	restoreTodos(m.todos, sess)
-	m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})
+	m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})
 	if done, total := m.todos.Counts(); total > 0 {
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("task list dipulihkan: %d/%d selesai", done, total))})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("task list dipulihkan: %d/%d selesai", done, total))})
 	}
 	m.refresh()
 	return true
@@ -195,12 +195,12 @@ func (m *model) openModelPicker() {
 	defer cancel()
 	models, err := m.ag.Client.ListModels(ctx)
 	if err != nil {
-		m.lines = append(m.lines, line{lineError, stErr.Render("gagal ambil daftar model: " + err.Error())})
+		m.lines = append(m.lines, line{kind: lineError, text: stErr.Render("gagal ambil daftar model: " + err.Error())})
 		m.refresh()
 		return
 	}
 	if len(models) == 0 {
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render("endpoint tidak mengembalikan model")})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("endpoint tidak mengembalikan model")})
 		m.refresh()
 		return
 	}
@@ -209,7 +209,7 @@ func (m *model) openModelPicker() {
 		mm.ag.Client.SetModel(name)
 		mm.cfg.Model.Name = name
 		config.SaveModel(name)
-		mm.lines = append(mm.lines, line{lineInfo, stMuted.Render("model: " + name + " (tersimpan)")})
+		mm.lines = append(mm.lines, line{kind: lineInfo, text: stMuted.Render("model: " + name + " (tersimpan)")})
 	})
 	m.picker.setHeaders(headers)
 }
@@ -345,17 +345,17 @@ func runResumeTUI(cfg *config.Config, mem *memory.Store, id string) error {
 	m.sessID = sess.ID
 	restoreTodos(m.todos, sess)
 	if sess.Title != "" {
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("sesi dilanjutkan: " + sess.ID + " · " + sess.Title)})
 	}
 	for _, msg := range ag.Messages {
 		switch {
 		case msg.Role == llm.RoleUser:
 			if s, ok := msg.Content.(string); ok {
-				m.lines = append(m.lines, line{lineUser, s})
+				m.lines = append(m.lines, line{kind: lineUser, text: s})
 			}
 		case msg.Role == llm.RoleAssistant:
 			if s, ok := msg.Content.(string); ok && strings.TrimSpace(s) != "" {
-				m.lines = append(m.lines, line{lineAssistant, s})
+				m.lines = append(m.lines, line{kind: lineAssistant, text: s})
 			}
 		}
 	}

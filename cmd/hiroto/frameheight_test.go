@@ -21,7 +21,7 @@ func TestFrameHeightBusyLongContent(t *testing.T) {
 	mm := updated.(model)
 
 	// Long markdown table line like a real agent answer.
-	mm.lines = append(mm.lines, line{lineAssistant, strings.Repeat("| kolom | sangat panjang sekali | nilai |", 10)})
+	mm.lines = append(mm.lines, line{kind: lineAssistant, text: strings.Repeat("| kolom | sangat panjang sekali | nilai |", 10)})
 	mm.busy = true
 
 	frame := lipgloss.Height(mm.View())
@@ -113,5 +113,39 @@ func TestToolActivityShowsInChrome(t *testing.T) {
 	mm.activityText = ""
 	if !strings.Contains(mm.View(), "berpikir") {
 		t.Fatal("thinking label missing after tool completes")
+	}
+}
+
+// TestLazyMarkdownStreaming: markdown styling must be applied exactly once
+// per assistant turn — lazily in endAssistantLine, not on every stream chunk
+// (which was the main render hotspot). Resize must reset the flag so lines
+// re-wrap at the new width.
+func TestLazyMarkdownStreaming(t *testing.T) {
+	m := tinyModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := updated.(model)
+
+	// Stream two chunks; neither should be styled yet.
+	mm.appendStream("## Header ")
+	mm.appendStream("body text")
+	if mm.lines[len(mm.lines)-1].mdRendered {
+		t.Fatal("stream chunk prematurely styled")
+	}
+
+	// Finish the turn → single style pass.
+	mm.endAssistantLine()
+	l := mm.lines[len(mm.lines)-2] // last is the turn-separator info line
+	if l.kind != lineAssistant {
+		t.Fatalf("expected assistant line, got kind %d", l.kind)
+	}
+	if !l.mdRendered {
+		t.Fatal("endAssistantLine did not mark line styled")
+	}
+
+	// Simulate a resize to a new width → flags reset for re-wrap.
+	updated, _ = mm.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	mm = updated.(model)
+	if mm.lines[0].mdRendered {
+		t.Fatal("resize did not reset mdRendered for re-wrap")
 	}
 }

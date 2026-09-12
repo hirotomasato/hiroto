@@ -355,7 +355,7 @@ func (m *model) renderPicker() string {
 func (m *model) openSkillsPicker() {
 	n := len(m.ag.Skills)
 	if n == 0 {
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render("tidak ada skill terindex")})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("tidak ada skill terindex")})
 		m.refresh()
 		return
 	}
@@ -368,7 +368,7 @@ func (m *model) openSkillsPicker() {
 	p := newPicker(fmt.Sprintf("pilih skill (%d)", n), display, values, func(mm *model, name string) {
 		for _, s := range mm.ag.Skills {
 			if s.Name == name {
-				mm.lines = append(mm.lines, line{lineInfo, stMuted.Render("skill: " + s.Name + " — " + s.Description)})
+				mm.lines = append(mm.lines, line{kind: lineInfo, text: stMuted.Render("skill: " + s.Name + " — " + s.Description)})
 				break
 			}
 		}

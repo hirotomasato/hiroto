@@ -76,16 +76,16 @@ func (m *model) handleTodoCmd(fields []string) {
 	case "unstick", "reset":
 		n := m.todos.Demote()
 		if n == 0 {
-			m.lines = append(m.lines, line{lineInfo, stMuted.Render("tidak ada task yang nyangkut")})
+			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("tidak ada task yang nyangkut")})
 			return
 		}
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("%d task in_progress → pending", n))})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("%d task in_progress → pending", n))})
 		m.showTodos()
 
 	case "clear":
 		done, total := m.todos.Counts()
 		m.todos.Clear()
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render(fmt.Sprintf("task list dihapus (%d/%d selesai)", done, total))})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render(fmt.Sprintf("task list dihapus (%d/%d selesai)", done, total))})
 
 	default:
 		m.flashMsg(todoUsage, "error")
@@ -97,7 +97,7 @@ func (m *model) handleTodoCmd(fields []string) {
 func (m *model) showTodos() {
 	items := m.todos.Snapshot()
 	if len(items) == 0 {
-		m.lines = append(m.lines, line{lineInfo, stMuted.Render("belum ada task — " + todoUsage)})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("belum ada task — " + todoUsage)})
 		return
 	}
 	var b strings.Builder
@@ -117,7 +117,7 @@ func (m *model) showTodos() {
 		}
 		b.WriteString("\n  " + mark + " " + stHelp.Render(it.ID) + " " + it.Content)
 	}
-	m.lines = append(m.lines, line{lineInfo, b.String()})
+	m.lines = append(m.lines, line{kind: lineInfo, text: b.String()})
 }
 
 // nextTodoID returns the smallest unused positive integer id as a string, so
