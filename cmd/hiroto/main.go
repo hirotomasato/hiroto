@@ -1277,6 +1277,12 @@ func (m model) View() string {
 		return "memuat…"
 	}
 
+	// Recalculate the viewport height on every render. The todo panel can
+	// grow/shrink between refresh() calls (child `hiroto tool todo` writes
+	// are picked up by ReloadIfChanged inside renderTodoPanel), and a stale
+	// height makes the frame taller than the terminal — the terminal scrolls
+	// and stale status bars stack up at the bottom.
+	m.recalcViewport()
 	body := lipgloss.JoinVertical(lipgloss.Left, m.layoutParts(true)...)
 	if m.picker != nil {
 		box := m.renderPicker()
