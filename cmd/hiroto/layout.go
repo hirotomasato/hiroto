@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -50,9 +51,15 @@ func (m *model) layoutParts(includeVP bool) []string {
 	// the spinner animates during long LLM waits — inside the viewport the
 	// content only updates on refresh(), which froze the frame mid-think.
 	if m.busy {
+		// OMP-style live activity: while a tool runs, show its label with a
+		// ticking elapsed time instead of the generic "berpikir…". The row
+		// re-renders on every spinner tick, so the seconds count up live.
 		label := "berpikir…"
 		if m.streaming {
 			label = "menulis…"
+		}
+		if m.activityText != "" && !m.activityStart.IsZero() {
+			label = fmt.Sprintf("%s… %ds", m.activityText, int(time.Since(m.activityStart).Seconds()))
 		}
 		parts = append(parts, stMuted.Render(m.spinner.View()+" "+label))
 	}

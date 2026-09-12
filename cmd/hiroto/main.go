@@ -110,8 +110,11 @@ type model struct {
 	spinner   spinner.Model
 	busy      bool
 	cancel    context.CancelFunc
-	width     int
-	height    int
+
+	activityText  string    // label of the tool currently running ("Running go build")
+	activityStart time.Time // when that tool call started (live elapsed in chrome)
+	width         int
+	height        int
 
 	clarifyQuestion string
 	clarifyResp     chan string
@@ -565,6 +568,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancel()
 				m.busy = false
 				m.streaming = false
+				m.activityText = ""
 				// Nothing is running any more: an in_progress task would sit
 				// in the panel forever, so hand it back to pending.
 				if m.todos != nil {
@@ -683,12 +687,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventMsg:
 		m.streaming = false
 		switch msg.Type {
-		case "tool_start", "tool_end", "error", "compress_start", "compress_end":
+		case "tool_start":
+			m.activityText = toolActivity(msg.ToolName, msg.ToolArgs)
+			m.activityStart = time.Now()
+			m.lines = append(m.lines, m.renderAgentEvent(msg))
+		case "tool_end", "error", "compress_start", "compress_end":
+			m.activityText = ""
 			m.lines = append(m.lines, m.renderAgentEvent(msg))
 		}
-		// Snapshot the session after each tool completes or error
-		// so a crash mid-turn only loses the current operation's
-		// output, not all progress since the turn started.
 		if msg.Type == "tool_end" || msg.Type == "error" {
 			m.saveSession()
 		}
@@ -698,6 +704,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case assistantDoneMsg:
 		m.busy = false
 		m.streaming = false
+		m.activityText = ""
 		m.input.Placeholder = "ketik pesan untuk hiroto…"
 		m.endAssistantLine()
 		// A failed/cancelled run leaves no one working: demote in_progress so

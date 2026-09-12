@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -78,5 +79,39 @@ func TestLoadingIndicatorAnimatesAsChrome(t *testing.T) {
 	}
 	if lipgloss.Height(view) != 30 {
 		t.Fatalf("idle: frame height = %d, want 30", lipgloss.Height(view))
+	}
+}
+
+// TestToolActivityShowsInChrome: while a tool runs the loading row must show
+// the tool's label with a ticking elapsed time instead of "berpikir…", and it
+// must clear when the tool completes (no stale label into the next turn).
+func TestToolActivityShowsInChrome(t *testing.T) {
+	m := tinyModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := updated.(model)
+	mm.busy = true
+
+	if strings.Contains(mm.View(), "Running go build") {
+		t.Fatal("activity label visible before tool_start")
+	}
+
+	// Simulate a running tool.
+	mm.activityText = "Running go build"
+	mm.activityStart = time.Now().Add(-3 * time.Second)
+	view := mm.View()
+	if !strings.Contains(view, "Running go build") {
+		t.Fatal("activity label missing while tool runs")
+	}
+	if !strings.Contains(view, "3s") {
+		t.Fatal("elapsed seconds missing")
+	}
+	if strings.Contains(view, "berpikir") {
+		t.Fatal("generic thinking label shown while a tool runs")
+	}
+
+	// Tool completes → label cleared → back to thinking.
+	mm.activityText = ""
+	if !strings.Contains(mm.View(), "berpikir") {
+		t.Fatal("thinking label missing after tool completes")
 	}
 }
