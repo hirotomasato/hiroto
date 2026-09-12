@@ -62,6 +62,12 @@ type Agent struct {
 	CompressKeepTurns int // recent turns to keep intact (default 6)
 	RetryAttempts     int // auto-retry on provider errors (default 2)
 
+	// Allow lists tool names permitted without interactive approval. Risky
+	// tools not in this list are rejected (headless) — see approveTool.
+	Allow []string
+	// SkipPermissions bypasses the approval gate entirely (--dangerously-skip).
+	SkipPermissions bool
+
 	Messages  []llm.Message
 	Emit      func(Event) // UI callback
 	SteerCh   chan string // injected mid-turn: read after each tool call
@@ -282,6 +288,33 @@ func maxInt(a, b int) int {
 	return b
 }
 
+// riskyTools are tools that mutate state or run code and so require approval
+// unless explicitly allowlisted or --dangerously-skip-permissions is set.
+var riskyTools = map[string]bool{
+	"patch": true, "write_file": true, "terminal": true,
+	"execute_code": true, "execute_python": true, "ast_edit": true,
+	"process": true, "delegate_task": true, "cronjob": true, "eval": true,
+	"skill_manage": true, "smart_pipe": true,
+}
+
+// isRisky reports whether a tool needs approval before running.
+func isRisky(name string) bool { return riskyTools[name] }
+
+// approveTool decides whether a tool call may run. It returns false (and the
+// tool should be refused) when the tool is risky, not allowlisted, and
+// permissions are not skipped. Read-only tools always pass.
+func (a *Agent) approveTool(name string) bool {
+	if a.SkipPermissions || !isRisky(name) {
+		return true
+	}
+	for _, t := range a.Allow {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
+
 // executeToolCalls runs a batch of tool calls and returns their tool-result
 // messages in the SAME order as the calls (required: each result must follow
 // its tool_call_id). A single call runs inline; multiple independent calls run
@@ -296,8 +329,14 @@ func (a *Agent) executeToolCalls(ctx context.Context, calls []llm.ToolCall) []ll
 		start := time.Now()
 
 		var result tools.Result
-		tool, ok := a.Reg.Get(name)
-		if !ok {
+		if !a.approveTool(name) {
+			// Risky tool not allowlisted (and permissions not skipped): refuse so
+			// the model can adjust instead of mutating state without consent.
+			result = tools.Result{
+				Output:  fmt.Sprintf("tool %q requires approval — add it to `allow:` in config.yaml or run with --dangerously-skip-permissions", name),
+				IsError: true,
+			}
+		} else if tool, ok := a.Reg.Get(name); !ok {
 			result = tools.Result{Output: fmt.Sprintf("unknown tool %q", name), IsError: true}
 		} else {
 			result = tool.Exec(ctx, tools.JSONArgs(tc.Function.Arguments))

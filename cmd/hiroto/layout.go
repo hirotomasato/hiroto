@@ -83,13 +83,15 @@ func (m *model) statusBarText() string {
 	left := stChip.Render(" HR ") + stMuted.Render(" hiroto v"+version)
 	right := status
 	if len(m.ag.Messages) > 0 {
-		tok := 0
-		for _, msg := range m.ag.Messages {
-			if s, ok := msg.Content.(string); ok {
-				tok += len(s) / 3
-			}
+		tok := estimateTokens(m.ag.Messages)
+		// Show context usage as a % of the compression budget (the effective
+		// working-memory limit). Frees the user from guessing when auto-
+		// compression will kick in.
+		pct := 0
+		if m.ag.CompressBudget > 0 {
+			pct = tok * 100 / m.ag.CompressBudget
 		}
-		right = stMuted.Render(fmt.Sprintf("~%dK", tok/1000)) + "  " + status
+		right = stMuted.Render(fmt.Sprintf("~%dK · ctx %d%%", tok/1000, pct)) + "  " + status
 	}
 	pad := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if pad < 1 {

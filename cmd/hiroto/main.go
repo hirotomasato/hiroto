@@ -463,6 +463,9 @@ var (
 	streamCh = make(chan tea.Msg, 256)
 	mdRender *glamour.TermRenderer
 	mdWidth  int
+	// skipPermissions is set by --dangerously-skip-permissions: bypass the
+	// tool-approval gate entirely (all tools run without consent).
+	skipPermissions bool
 )
 
 // mdRenderer returns a markdown renderer for the given wrap width. Uses the
@@ -1443,6 +1446,14 @@ func main() {
 	mem := memory.New()
 	defer tools.KillAllKernels()
 
+	// --dangerously-skip-permissions may appear anywhere in argv: bypass the
+	// tool-approval gate (all tools run without consent).
+	for _, a := range os.Args[1:] {
+		if a == "--dangerously-skip-permissions" {
+			skipPermissions = true
+		}
+	}
+
 	// --banner: print the startup banner and exit (optional width arg)
 	if len(os.Args) >= 2 && os.Args[1] == "--banner" {
 		w := 80
@@ -1580,6 +1591,8 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 		CompressKeepTurns: cfg.Agent.CompressKeepTurns,
 		RetryAttempts:     2,
 		Workdir:           workdir(),
+		Allow:             cfg.Allow,
+		SkipPermissions:   skipPermissions,
 	}
 	// Model list is fetched asynchronously after the TUI boots (see
 	// fetchModelsCmd). The 10s timeout used to block startup so the
