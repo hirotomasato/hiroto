@@ -184,3 +184,40 @@ func TestCopyTextOSC52(t *testing.T) {
 		t.Errorf("base64 round-trip failed: %v", err)
 	}
 }
+
+// TestAssistantMarkdownNoFragileANSI: glamour's markdown STRUCTURE is kept
+// (code fences, bold resolved) but its fragile color escapes are stripped —
+// those standalone "\x1b[38;5;252m" runs made some terminals print literal
+// "[38;5;252m" text. Code content must survive the strip.
+func TestAssistantMarkdownNoFragileANSI(t *testing.T) {
+	m := tinyModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := updated.(model)
+	mm.appendStream("Jawaban dengan `code` dan **bold**.\n\n```go\nfmt.Println(\"x\")\n```\n\nSelesai.")
+	mm.endAssistantLine()
+	for _, ln := range mm.lines {
+		if ln.kind != lineAssistant {
+			continue
+		}
+		if strings.Contains(ln.text, "\x1b[38;5;252m") {
+			t.Errorf("fragile 252 escape present: %q", ln.text[:60])
+		}
+		if !strings.Contains(ln.text, "fmt.Println") {
+			t.Errorf("code block content lost after strip: %q", ln.text)
+		}
+	}
+}
+
+// TestStripSeveredANSI: healthy escapes pass through; a bracket that begins a
+// CSI sequence but lost its ESC is neutralized so the terminal can't print
+// it as literal text.
+func TestStripSeveredANSI(t *testing.T) {
+	healthy := "a\x1b[38;5;252mb\x1b[0m"
+	if got := stripSeveredANSI(healthy); got != healthy {
+		t.Errorf("healthy escape mangled: %q", got)
+	}
+	severed := "prefix [38;5;252m suffix"
+	if got := stripSeveredANSI(severed); strings.Contains(got, "[38;5;252m") {
+		t.Errorf("severed CSI not neutralized: %q", got)
+	}
+}

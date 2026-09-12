@@ -36,6 +36,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ---------- styles (Hiroto-skin-inspired palette) ----------
@@ -1269,11 +1270,16 @@ func (m *model) endAssistantLine() {
 	}
 	// Finalize the finished assistant line: this is the single style pass
 	// per turn (OMP parity — raw while streaming, styled once complete).
+	// We keep glamour's markdown STRUCTURE (code fences, indentation, bold
+	// markers resolved) but strip its color ANSI: those standalone
+	// "\x1b[38;5;252m" runs are fragile — some terminals misrender them as
+	// literal "[38;5;252m" text. Plain text with our own lipgloss styling
+	// is robust and clean.
 	if len(m.lines) > 0 {
 		l := &m.lines[len(m.lines)-1]
 		if l.kind == lineAssistant && !l.mdRendered && strings.TrimSpace(l.text) != "" {
 			if rendered, err := mdRendererW(m.width - 2).Render(l.text); err == nil {
-				l.text = strings.TrimRight(rendered, "\n")
+				l.text = strings.TrimRight(ansi.Strip(rendered), "\n")
 				l.mdRendered = true
 			}
 		}
@@ -1322,7 +1328,7 @@ func (m *model) refresh() {
 			// happens once in endAssistantLine().
 			if !ln.mdRendered {
 				if rendered, err := mdRendererW(m.width - 2).Render(text); err == nil {
-					text = strings.TrimRight(rendered, "\n")
+					text = strings.TrimRight(ansi.Strip(rendered), "\n")
 					ln.mdRendered = true
 					ln.text = text
 				}
@@ -1331,7 +1337,7 @@ func (m *model) refresh() {
 		}
 		b.WriteString(text + "\n")
 	}
-	content := b.String()
+	content := stripSeveredANSI(b.String())
 	atBottom := m.vp.AtBottom()
 	m.recalcViewport()
 	m.vp.SetContent(content)
@@ -1342,6 +1348,34 @@ func (m *model) refresh() {
 	} else if atBottom {
 		m.vp.GotoBottom()
 	}
+}
+
+// stripSeveredANSI removes ANSI CSI sequences that lost their leading ESC.
+// A healthy escape is "\x1b[...". When a sequence is severed (e.g. truncated
+// mid-escape, or a bare "[" from a misbehaving emitter), the terminal prints
+// the rest literally — the "[38;5;252m" garbage. We drop those fragments so
+// the frame stays clean. Well-formed escapes (preceded by \x1b) pass through.
+func stripSeveredANSI(s string) string {
+	if !strings.Contains(s, "[") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := range len(s) {
+		if s[i] == '[' && i+1 < len(s) && isCSIFinal(s[i+1]) && (i == 0 || s[i-1] != 0x1b) {
+			// Severed CSI: skip "[", emit the parameter bytes as plain text
+			// only if they're clearly not a sequence; safest is to drop the
+			// bracket and continue (the following "38;5;252m" becomes inert text).
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// isCSIFinal reports whether b can begin a CSI parameter (digit or ';').
+func isCSIFinal(b byte) bool {
+	return (b >= '0' && b <= '9') || b == ';'
 }
 
 func (m model) View() string {
