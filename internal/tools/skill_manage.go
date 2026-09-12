@@ -23,12 +23,19 @@ func skillManageExec(ctx context.Context, args map[string]any) Result {
 	if name == "" {
 		return Result{Output: "missing name", IsError: true}
 	}
+	// Names/categories are single path segments: block traversal and separators.
+	if !skillNameRe.MatchString(name) {
+		return Result{Output: "invalid skill name — use [a-z0-9_-]", IsError: true}
+	}
 	home := os.Getenv("HIROTO_HOME")
 	if home == "" {
 		homeDir, _ := os.UserHomeDir()
 		home = filepath.Join(homeDir, ".hiroto")
 	}
 	category, _ := args["category"].(string)
+	if category != "" && !skillNameRe.MatchString(category) {
+		return Result{Output: "invalid category — use [a-z0-9_-]", IsError: true}
+	}
 	dir := filepath.Join(home, "skills", category, name)
 	path := filepath.Join(dir, "SKILL.md")
 

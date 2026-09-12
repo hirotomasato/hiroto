@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -81,6 +82,25 @@ func LoadPlugins(dirs []string) []ToolDef {
 	return tools
 }
 
+var secretEnvKeyRe = regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|auth[_-]?token|aws_|github_)`)
+
+// sanitizeEnv filters secret-bearing environment variables so a plugin
+// subprocess can't read API keys or credentials from the ambient environment.
+func sanitizeEnv() []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		key := kv
+		if i := strings.Index(kv, "="); i >= 0 {
+			key = kv[:i]
+		}
+		if secretEnvKeyRe.MatchString(key) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 func runPluginTool(ctx context.Context, dir, command string, args map[string]any) (string, bool) {
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
@@ -88,7 +108,7 @@ func runPluginTool(ctx context.Context, dir, command string, args map[string]any
 	}
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = sanitizeEnv()
 	input, _ := json.Marshal(args)
 	cmd.Stdin = strings.NewReader(string(input))
 	out, err := cmd.CombinedOutput()

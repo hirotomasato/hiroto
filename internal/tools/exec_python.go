@@ -88,7 +88,7 @@ func executePython(ctx context.Context, args map[string]any) Result {
 
 	cmd := exec.CommandContext(ctx2, "python3", script)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = sanitizeEnv()
 	out, err := cmd.CombinedOutput()
 	result := strings.TrimSpace(string(out))
 	if err != nil {

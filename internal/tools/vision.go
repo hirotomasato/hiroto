@@ -25,6 +25,9 @@ func visionExec(ctx context.Context, args map[string]any, opts Options) Result {
 	if path == "" {
 		return Result{Output: "missing path", IsError: true}
 	}
+	if w := sensitivePath(path); w != "" {
+		return Result{Output: "BLOCKED: " + w, IsError: true}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Result{Output: fmt.Sprintf("cannot read image: %v", err), IsError: true}

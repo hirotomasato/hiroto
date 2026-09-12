@@ -78,7 +78,12 @@ func (s *Store) Save(sess *Session) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.file(sess.ID), data, 0o644)
+	fpath := s.file(sess.ID)
+	tmp := fpath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, fpath)
 }
 
 // Load reads one session by id (ids are sanitized).

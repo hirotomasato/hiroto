@@ -8,8 +8,7 @@ import (
 
 // ActivityLabel turns a tool call + raw JSON args into a short, natural
 // present-tense phrase ("Reading main.go", "Running go build") for live status
-// display. Shared by the TUI and the Telegram gateway so both narrate tool
-// activity identically.
+// display.
 //
 // If the model supplied an "activity" arg (its own narration), that wins.
 // Otherwise a label is derived from the tool name + key argument.

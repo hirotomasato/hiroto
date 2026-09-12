@@ -42,7 +42,7 @@ func browserFetch(ctx context.Context, args map[string]any) Result {
 		"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
 		"--dump-dom", "--virtual-time-budget="+fmt.Sprintf("%d", timeout*1000), url,
 	)
-	cmd.Env = append(os.Environ(), "DISPLAY=")
+	cmd.Env = append(sanitizeEnv(), "DISPLAY=")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Result{Output: fmt.Sprintf("browser_fetch error: %v\n%s", err, string(out)), IsError: true}
@@ -74,7 +74,7 @@ func browserScreenshot(ctx context.Context, args map[string]any) Result {
 		"--screenshot="+path, "--window-size=1280,720",
 		"--virtual-time-budget="+fmt.Sprintf("%d", timeout*1000), url,
 	)
-	cmd.Env = append(os.Environ(), "DISPLAY=")
+	cmd.Env = append(sanitizeEnv(), "DISPLAY=")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Result{Output: fmt.Sprintf("browser_screenshot error: %v\n%s", err, string(out)), IsError: true}
@@ -109,6 +109,7 @@ func lspCheck(path string) string {
 		dir := filepath.Dir(path)
 		cmd := exec.Command("go", "vet", ".")
 		cmd.Dir = dir
+		cmd.Env = sanitizeEnv()
 		out, err := cmd.CombinedOutput()
 		text := strings.TrimSpace(string(out))
 		if err != nil && text != "" {
@@ -116,6 +117,7 @@ func lspCheck(path string) string {
 		}
 	case ".py":
 		cmd := exec.Command("python3", "-m", "py_compile", path)
+		cmd.Env = sanitizeEnv()
 		out, err := cmd.CombinedOutput()
 		text := strings.TrimSpace(string(out))
 		if err != nil && text != "" {
@@ -125,6 +127,7 @@ func lspCheck(path string) string {
 		// Check if cargo is available in the parent dir.
 		cmd := exec.Command("cargo", "check", "--message-format=short")
 		cmd.Dir = filepath.Dir(path)
+		cmd.Env = sanitizeEnv()
 		out, _ := cmd.CombinedOutput()
 		text := strings.TrimSpace(string(out))
 		if text != "" {
@@ -132,9 +135,10 @@ func lspCheck(path string) string {
 		}
 	case ".ts", ".tsx", ".js", ".jsx":
 		cmd := exec.Command("npx", "tsc", "--noEmit", "--pretty", path)
-		out, _ := cmd.CombinedOutput()
+		cmd.Env = sanitizeEnv()
+		out, err := cmd.CombinedOutput()
 		text := strings.TrimSpace(string(out))
-		if text != "" {
+		if err != nil && text != "" {
 			return "LSP (tsc):\n" + text
 		}
 	}

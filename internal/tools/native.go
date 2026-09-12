@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -53,6 +54,38 @@ var secretPatterns = []string{
 	`(?i)(aws[_-]?access[_-]?key|aws[_-]?secret|AKIA[0-9A-Z]{16})`,
 	`(?i)(github[_-]?token|gh[_-]?token|ghp_[0-9a-zA-Z]{36})`,
 	`(?i)(jwt|json[_-]?web[_-]?token)\s*[:=]\s*['"]?eyJ`,
+}
+
+// RedactSecrets scans text for common secret patterns (API keys, tokens,
+// passwords, private keys) and replaces matches with [REDACTED]. Called by
+// the agent loop before tool output reaches the LLM.
+func RedactSecrets(text string) string {
+	for _, pat := range secretPatterns {
+		re := regexp.MustCompile(pat)
+		text = re.ReplaceAllString(text, "[REDACTED]")
+	}
+	return text
+}
+
+var secretEnvKeyRe = regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|auth[_-]?token|aws_|github_)`)
+
+// sanitizeEnv filters secret-bearing environment variables out of a copy of
+// os.Environ(). Used before spawning untrusted subprocesses (execute_code,
+// execute_python, delegates) so a prompt-injected model can't read API keys
+// or credentials from the ambient environment.
+func sanitizeEnv() []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		key := kv
+		if i := strings.Index(kv, "="); i >= 0 {
+			key = kv[:i]
+		}
+		if secretEnvKeyRe.MatchString(key) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 func secretScanExec(ctx context.Context, args map[string]any) Result {
@@ -159,6 +192,9 @@ func aggregateReportsExec(ctx context.Context, args map[string]any) Result {
 	}
 	content := fmt.Sprintf("# Aggregated Report\n\n%d unique findings from %d sources\n\n%s",
 		len(allLines), len(pathsRaw), strings.Join(allLines, "\n"))
+	if w := sensitivePath(output); w != "" {
+		return Result{Output: "BLOCKED: " + w, IsError: true}
+	}
 	os.MkdirAll(filepath.Dir(output), 0755)
 	if err := os.WriteFile(output, []byte(content), 0644); err != nil {
 		return Result{Output: fmt.Sprintf("write error: %v", err), IsError: true}
@@ -183,6 +219,12 @@ func smartPipeExec(ctx context.Context, args map[string]any) Result {
 	}
 	// Chain commands with pipes
 	pipeline := strings.Join(cmds, " | ")
+	if d := dangerousCmd(pipeline); d != "" {
+		return Result{Output: "BLOCKED: " + d, IsError: true}
+	}
+	if strings.HasPrefix(pipeline, "--force ") {
+		pipeline = strings.TrimPrefix(pipeline, "--force ")
+	}
 	cmd := exec.CommandContext(ctx, shellCmd(), shellFlag(), pipeline)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,11 @@ func delegateExec(ctx context.Context, args map[string]any) Result {
 	if goal == "" {
 		return Result{Output: "missing goal", IsError: true}
 	}
+	// Cap recursive delegation at depth 2. A delegate can spawn one more
+	// level, but a grandchild delegate cannot spawn further.
+	if n, _ := strconv.Atoi(os.Getenv("HIROTO_DELEGATE_DEPTH")); n >= 2 {
+		return Result{Output: "delegate depth limit reached (max 2)", IsError: true}
+	}
 	timeout := 120
 	if t, ok := toInt(args["timeout"]); ok && t > 0 {
 		timeout = t
@@ -33,7 +39,13 @@ func delegateExec(ctx context.Context, args map[string]any) Result {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx2, "hiroto", "-q", goal)
-	cmd.Env = os.Environ()
+	depth := strconv.Itoa(1)
+	if d := os.Getenv("HIROTO_DELEGATE_DEPTH"); d != "" {
+		if n, _ := strconv.Atoi(d); n > 0 {
+			depth = strconv.Itoa(n + 1)
+		}
+	}
+	cmd.Env = append(sanitizeEnv(), "HIROTO_DELEGATE_DEPTH="+depth)
 	out, err := cmd.CombinedOutput()
 	result := strings.TrimSpace(string(out))
 	if err != nil {
@@ -111,7 +123,7 @@ func cronSchedule(args map[string]any) Result {
 	go func() {
 		time.Sleep(time.Until(entry.NextRun))
 		cmd := exec.Command("hiroto", "-q", entry.Command)
-		cmd.Env = os.Environ()
+		cmd.Env = sanitizeEnv()
 		cmd.Run()
 	}()
 

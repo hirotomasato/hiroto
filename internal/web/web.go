@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -18,6 +19,21 @@ import (
 )
 
 var uaClient = &http.Client{Timeout: 20 * time.Second}
+
+// extractClient validates every hop (initial URL + redirects) against SSRF:
+// no loopback, private, link-local, or multicast destinations.
+var extractClient = &http.Client{
+	Timeout: 20 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		if isUnsafeURL(req.URL.String()) {
+			return fmt.Errorf("redirect to blocked address: %s", req.URL.Host)
+		}
+		return nil
+	},
+}
 
 const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -201,12 +217,15 @@ func stripBlocks(doc string) string {
 }
 
 func extractOne(ctx context.Context, u string) (PageResult, error) {
+	if isUnsafeURL(u) {
+		return PageResult{}, fmt.Errorf("blocked: URL resolves to a private/internal address")
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return PageResult{}, err
 	}
 	req.Header.Set("User-Agent", userAgent)
-	resp, err := uaClient.Do(req)
+	resp, err := extractClient.Do(req)
 	if err != nil {
 		return PageResult{}, err
 	}
@@ -249,4 +268,35 @@ func htmlToText(doc string) (text, title string) {
 		}
 	}
 	return strings.Join(kept, "\n"), title
+}
+
+// isUnsafeURL reports whether a URL targets a loopback, private, link-local,
+// or multicast address — the SSRF-blocking predicate for web_extract.
+func isUnsafeURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return true
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return true
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		return isUnsafeIP(ip)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return false // DNS failure is handled by the HTTP client later
+	}
+	for _, ip := range ips {
+		if isUnsafeIP(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func isUnsafeIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
 }

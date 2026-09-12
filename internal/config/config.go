@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,25 +27,6 @@ type Config struct {
 	Skills struct {
 		Dirs []string `yaml:"dirs"` // extra skill dirs; ~/.hiroto/skills always loaded
 	} `yaml:"skills"`
-	Gateway struct {
-		TelegramToken string `yaml:"telegram_token"` // Bot API token (empty = off)
-		// AllowedUsers is the list of Telegram numeric user IDs permitted to
-		// use the bot. Empty = deny everyone (safe default for a bot with
-		// terminal access). Can also be set via HIROTO_TELEGRAM_ALLOWED_USERS
-		// (comma-separated) in ~/.hiroto/.env.
-		AllowedUsers []int64 `yaml:"allowed_users"`
-		// ToolProgress controls how much tool activity is streamed to chat:
-		//   "all" (default) — every tool start/end as a breadcrumb line
-		//   "new"           — only tool_start lines (quieter)
-		//   "off"           — no breadcrumbs; only the final answer
-		ToolProgress string `yaml:"tool_progress"`
-		// CleanupProgress deletes the progress bubble once the final answer
-		// lands (Hermes-style). Failed turns keep the bubble as a breadcrumb.
-		CleanupProgress bool `yaml:"cleanup_progress"`
-		// TypingIndicator shows the "typing…" action while the agent works.
-		// Defaults to true when unset.
-		TypingIndicator *bool `yaml:"typing_indicator"`
-	} `yaml:"gateway"`
 	API struct {
 		Port int `yaml:"port"` // API server port (default 20129)
 	} `yaml:"api"`
@@ -99,45 +79,6 @@ func Load() *Config {
 // APIKey resolves ${ENV} references in config against the environment and ~/.hiroto/.env.
 func (c *Config) APIKey() string {
 	return resolveEnv(c.Model.APIKeyEnv)
-}
-
-// GatewayToken resolves ${ENV} references for the Telegram bot token, mirroring
-// APIKey so the secret can live in ~/.hiroto/.env instead of plaintext config.yaml.
-func (c *Config) GatewayToken() string {
-	return resolveEnv(c.Gateway.TelegramToken)
-}
-
-// AllowedUsers returns the Telegram user-ID allowlist, merging config.yaml's
-// gateway.allowed_users with HIROTO_TELEGRAM_ALLOWED_USERS (comma-separated) in
-// the environment / ~/.hiroto/.env. Duplicates are removed. An empty result
-// means "deny everyone" — the safe default for a terminal-capable bot.
-func (c *Config) AllowedUsers() []int64 {
-	seen := map[int64]bool{}
-	var out []int64
-	add := func(id int64) {
-		if id != 0 && !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	for _, id := range c.Gateway.AllowedUsers {
-		add(id)
-	}
-	raw := os.Getenv("HIROTO_TELEGRAM_ALLOWED_USERS")
-	if raw == "" {
-		raw = dotEnvValue(HomeDir(), "HIROTO_TELEGRAM_ALLOWED_USERS")
-	}
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		var id int64
-		if _, err := fmt.Sscan(part, &id); err == nil {
-			add(id)
-		}
-	}
-	return out
 }
 
 // resolveEnv expands a ${VAR} reference against the process env, then ~/.hiroto/.env.

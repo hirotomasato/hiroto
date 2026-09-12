@@ -80,6 +80,9 @@ func Discover(extraDirs []string) []Skill {
 
 func loadSkillDir(dir string, seen map[string]Skill) {
 	path := filepath.Join(dir, "SKILL.md")
+	if fi, err := os.Stat(path); err != nil || fi.Size() > 1<<20 {
+		return // skip missing or oversized SKILL.md
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return

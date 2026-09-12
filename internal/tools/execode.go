@@ -83,7 +83,7 @@ func executeCode(ctx context.Context, args map[string]any) Result {
 
 	cmd := exec.CommandContext(ctx2, "node", script)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = sanitizeEnv()
 	out, err := cmd.CombinedOutput()
 	result := strings.TrimSpace(string(out))
 	if err != nil {

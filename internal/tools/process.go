@@ -57,6 +57,12 @@ func processStart(args map[string]any) Result {
 	if cmdStr == "" {
 		return Result{Output: "missing command", IsError: true}
 	}
+	if d := dangerousCmd(cmdStr); d != "" {
+		return Result{Output: "BLOCKED: " + d, IsError: true}
+	}
+	if strings.HasPrefix(cmdStr, "--force ") {
+		cmdStr = strings.TrimPrefix(cmdStr, "--force ")
+	}
 	procMu.Lock()
 	procNextID++
 	id := fmt.Sprintf("proc_%d", procNextID)
