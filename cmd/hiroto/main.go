@@ -4,7 +4,6 @@ package main
 // streaming assistant text, tool activity lines, spinners, session log.
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,7 +19,6 @@ import (
 	"github.com/hirotomasato/hiroto/internal/agent"
 	"github.com/hirotomasato/hiroto/internal/api"
 	"github.com/hirotomasato/hiroto/internal/config"
-	"github.com/hirotomasato/hiroto/internal/gateway"
 	"github.com/hirotomasato/hiroto/internal/llm"
 	"github.com/hirotomasato/hiroto/internal/memory"
 	"github.com/hirotomasato/hiroto/internal/plugin"
@@ -293,8 +291,7 @@ func colorizeDiff(s string) string {
 
 // toolActivity turns a tool call into a short, natural activity phrase —
 // Hermes-style ("Reading main.go", "Running the tests"). Delegates to the
-// shared agent.ActivityLabel so the TUI and the Telegram gateway narrate tool
-// activity identically.
+// shared agent.ActivityLabel so tool activity is narrated consistently.
 func toolActivity(name, rawArgs string) string {
 	return agent.ActivityLabel(name, rawArgs)
 }
@@ -900,7 +897,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		case "/model":
 			if len(fields) >= 2 {
 				m.cfg.Model.Name = fields[1]
-				m.ag.Client.Model = fields[1]
+				m.ag.Client.SetModel(fields[1])
 				m.lines = append(m.lines, line{lineInfo, stMuted.Render("model sesi ini: " + fields[1] + " (permanen: edit model: di ~/.hiroto/config.yaml)")})
 			} else {
 				m.openModelPicker()
@@ -1108,7 +1105,6 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			b.WriteString(fmt.Sprintf("base_url: %s\n", cfg.Model.BaseURL))
 			b.WriteString(fmt.Sprintf("max_turns: %d\n", cfg.Agent.MaxTurns))
 			b.WriteString(fmt.Sprintf("skills: %d\n", len(m.ag.Skills)))
-			b.WriteString(fmt.Sprintf("gateway: %v\n", cfg.Gateway.TelegramToken != ""))
 			m.lines = append(m.lines, line{lineInfo, stMuted.Render("◆ config\n" + b.String())})
 		case "/reasoning":
 			if len(fields) < 2 {
@@ -1333,6 +1329,7 @@ func (m model) View() string {
 func main() {
 	cfg := config.Load()
 	mem := memory.New()
+	defer tools.KillAllKernels()
 
 	// --banner: print the startup banner and exit (optional width arg)
 	if len(os.Args) >= 2 && os.Args[1] == "--banner" {
@@ -1356,12 +1353,6 @@ func main() {
 	// hiroto tool <name>  — execute a single tool (reads JSON args from stdin, used by execute_code)
 	if len(os.Args) >= 3 && os.Args[1] == "tool" {
 		runToolCmd(os.Args[2])
-		return
-	}
-
-	// hiroto gateway  — start Telegram bot (and future WhatsApp)
-	if len(os.Args) >= 2 && os.Args[1] == "gateway" {
-		runGateway(cfg, mem)
 		return
 	}
 
@@ -1600,43 +1591,6 @@ func runToolCmd(name string) {
 	fmt.Println(string(out))
 }
 
-// runGateway starts the Telegram bot (and future WhatsApp) if configured.
-func runGateway(cfg *config.Config, mem *memory.Store) {
-	token := cfg.GatewayToken()
-	if token == "" {
-		// Setup wizard: prompt for the token, then persist it to ~/.hiroto/.env.
-		fmt.Print("◆ Setup gateway — Token bot Telegram (dari @BotFather): ")
-		scanner := bufio.NewScanner(os.Stdin)
-		if !scanner.Scan() {
-			fmt.Fprintln(os.Stderr, "hiroto: input dibatalkan")
-			os.Exit(1)
-		}
-		token = strings.TrimSpace(scanner.Text())
-		if token == "" {
-			fmt.Fprintln(os.Stderr, "hiroto: token tidak boleh kosong")
-			os.Exit(1)
-		}
-		if err := config.SaveGatewayToken(token); err != nil {
-			fmt.Fprintln(os.Stderr, "hiroto: gagal simpan token:", err)
-			os.Exit(1)
-		}
-		fmt.Println("✓ token tersimpan di ~/.hiroto/.env (HIROTO_TELEGRAM_TOKEN)")
-	}
-	ag := buildAgent(cfg, mem)
-	fmt.Println("◆ Hiroto gateway — Telegram bot berjalan…")
-	typing := true
-	if cfg.Gateway.TypingIndicator != nil {
-		typing = *cfg.Gateway.TypingIndicator
-	}
-	opts := gateway.Options{
-		ToolProgress:    cfg.Gateway.ToolProgress,
-		CleanupProgress: cfg.Gateway.CleanupProgress,
-		TypingIndicator: typing,
-		AllowedUsers:    cfg.AllowedUsers(),
-	}
-	log.Fatal(gateway.Telegram(token, ag, opts))
-}
-
 // runAPI starts the OpenAI-compatible API server.
 func runAPI(cfg *config.Config, mem *memory.Store) {
 	port := cfg.API.Port
@@ -1648,7 +1602,7 @@ func runAPI(cfg *config.Config, mem *memory.Store) {
 	// land on whatever session ran last; PruneTodos expires it eventually.
 	os.Setenv(tools.EnvSessionID, "_api")
 	ag := buildAgent(cfg, mem)
-	api.PrintBanner(port, ag.Client.Model)
+	api.PrintBanner(port, ag.Client.Model())
 	srv := api.New(ag, port)
 	log.Fatal(srv.Start())
 }

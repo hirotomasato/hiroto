@@ -139,6 +139,9 @@ func RegisterBuiltin(r *Registry, opts Options) {
 	registerMemory(r, opts)
 	registerTodo(r, opts)
 	registerSkillView(r, opts)
+	registerEval(r)
+	registerLSP(r)
+	registerASTEdit(r)
 }
 
 type Options struct {
@@ -263,7 +266,7 @@ func shellFlag() string {
 func registerReadFile(r *Registry) {
 	r.Register(&Tool{
 		Name:        "read_file",
-		Description: "Read a text file with line numbers. Returns 'LINE_NUM|CONTENT'. Supports offset/limit pagination for large files.",
+		Description: "Read a text file. Code files (.go/.py/.ts/.js/.rs) return a structural summary of declarations (bodies elided) when called with just path; pass offset+limit to read specific lines. Non-code files return full content with line numbers.",
 		Parameters: obj(map[string]any{
 			"path":   str("File path (absolute or relative)"),
 			"offset": map[string]any{"type": "integer", "description": "1-indexed start line (default 1)"},
@@ -287,6 +290,15 @@ func registerReadFile(r *Registry) {
 					data, err := os.ReadFile(path)
 			if err != nil {
 				return Result{Output: err.Error(), IsError: true}
+			}
+			// Bare read of a code file → structural summary (declarations,
+			// bodies elided) like OMP. offset/limit paginate specific lines.
+			_, offsetSet := args["offset"]
+			_, limitSet := args["limit"]
+			if !offsetSet && !limitSet {
+				if summary, ok := codeStruct(data, filepath.Ext(path)); ok {
+					return Result{Output: summary + fmt.Sprintf("\n\n[declarations · bodies elided — read_file(path=%q, offset=<line>) untuk baca body]", path)}
+				}
 			}
 			offset := 1
 			if o, ok := args["offset"].(float64); ok && o > 0 {
@@ -481,6 +493,10 @@ func registerMemory(r *Registry, opts Options) {
 			target := "memory"
 			if t, ok := args["target"].(string); ok && t != "" {
 				target = t
+			}
+			// Block path traversal via the target segment.
+			if !skillNameRe.MatchString(target) {
+				return Result{Output: "invalid memory target — use [a-z0-9_-]", IsError: true}
 			}
 			content, _ := args["content"].(string)
 			switch action {
