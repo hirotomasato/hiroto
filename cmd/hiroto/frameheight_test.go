@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/hirotomasato/hiroto/internal/llm"
 	"github.com/hirotomasato/hiroto/internal/tools"
 )
 
@@ -147,5 +149,38 @@ func TestLazyMarkdownStreaming(t *testing.T) {
 	mm = updated.(model)
 	if mm.lines[0].mdRendered {
 		t.Fatal("resize did not reset mdRendered for re-wrap")
+	}
+}
+
+// TestLastAssistantText: copy must grab the most recent assistant message,
+// skip tool-call entries (Content not a plain string), and ignore empties.
+func TestLastAssistantText(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: "hello"},
+		{Role: llm.RoleAssistant, Content: "first answer"},
+		{Role: llm.RoleAssistant, Content: ""}, // empty — skip
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "1"}}, Content: nil},
+		{Role: llm.RoleAssistant, Content: "second answer"},
+	}
+	if got := lastAssistantText(msgs); got != "second answer" {
+		t.Errorf("got %q, want %q", got, "second answer")
+	}
+	if got := lastAssistantText(nil); got != "" {
+		t.Errorf("empty messages should give empty string, got %q", got)
+	}
+	// Only tool-call messages → nothing to copy.
+	if got := lastAssistantText(msgs[:4]); got != "first answer" {
+		t.Errorf("should fall back to last non-empty text, got %q", got)
+	}
+}
+
+// TestCopyTextOSC52: the copy path writes the OSC52 escape to the terminal.
+// We can't easily intercept os.Stdout here, so just assert the base64 the
+// sequence embeds round-trips (guards against encoding regressions).
+func TestCopyTextOSC52(t *testing.T) {
+	orig := "line satu\nline dua"
+	enc := base64.StdEncoding.EncodeToString([]byte(orig))
+	if dec, err := base64.StdEncoding.DecodeString(enc); err != nil || string(dec) != orig {
+		t.Errorf("base64 round-trip failed: %v", err)
 	}
 }

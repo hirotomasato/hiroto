@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/atotto/clipboard"
 
 	"github.com/hirotomasato/hiroto/internal/agent"
 	"github.com/hirotomasato/hiroto/internal/api"
@@ -426,6 +429,34 @@ func (m *model) runTurn(text string) {
 	}()
 }
 
+// copyText puts text on the system clipboard. It writes an OSC52 escape to
+// stdout — the terminal (and tmux/ssh, via allow-passthrough) sets its own
+// clipboard — which works under the altscreen where the X selection needs the
+// mouse. Falls back to atotto/clipboard if the OSC52 write fails.
+func copyText(s string) error {
+	enc := base64.StdEncoding.EncodeToString([]byte(s))
+	seq := "\x1b]52;c;" + enc + "\x07"
+	if _, err := os.Stdout.WriteString(seq); err == nil {
+		return nil
+	}
+	return clipboard.WriteAll(s)
+}
+
+// lastAssistantText returns the most recent assistant message text, for
+// copy-to-clipboard. Message.Content is `any` (string or []ContentPart), so
+// the string is extracted with a type assertion like the rest of the codebase.
+func lastAssistantText(msgs []llm.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != llm.RoleAssistant {
+			continue
+		}
+		if s, ok := msgs[i].Content.(string); ok && strings.TrimSpace(s) != "" {
+			return strings.TrimRight(s, "\n")
+		}
+	}
+	return ""
+}
+
 var (
 	chMu     sync.Mutex
 	streamCh = make(chan tea.Msg, 256)
@@ -686,6 +717,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlS:
 			m.saveSession()
 			m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("sesi disimpan")})
+			m.refresh()
+			return m, nil
+		case tea.KeyCtrlO:
+			// Copy the last assistant answer to the clipboard (OSC52).
+			if txt := lastAssistantText(m.ag.Messages); txt != "" {
+				if err := copyText(txt); err != nil {
+					m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("gagal salin: " + err.Error())})
+				} else {
+					m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("jawaban disalin ke clipboard")})
+				}
+			} else {
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("belum ada jawaban untuk disalin")})
+			}
 			m.refresh()
 			return m, nil
 		}
@@ -1473,7 +1517,10 @@ func main() {
 	// haven't been touched in a fortnight.
 	tools.MigrateLegacyTodo()
 	tools.PruneTodos(14 * 24 * time.Hour)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// No WithMouseCellMotion: capturing the mouse would route every drag to
+	// the app and block the terminal's native text selection (copy). Plain
+	// drag selects + copies; Shift+drag (or Option on macOS) still scrolls.
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "hiroto:", err)
 		os.Exit(1)

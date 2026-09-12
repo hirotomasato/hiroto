@@ -11,6 +11,8 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/hirotomasato/hiroto/internal/session"
 )
 
 var (
@@ -279,12 +281,28 @@ func (m *model) updatePicker(msg tea.KeyMsg) bool {
 			}
 			m.refresh()
 		}
+	case "y":
+		// Copy the highlighted session's last assistant answer (OSC52).
+		if p.cursor >= 0 && p.cursor < len(p.values) {
+			id := p.values[p.cursor]
+			ss := session.New()
+			if sess, err := ss.Load(id); err == nil {
+				if txt := lastAssistantText(fromStored(sess.Messages)); txt != "" {
+					if err := copyText(txt); err == nil {
+						m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("jawaban sesi disalin ke clipboard")})
+					}
+				}
+			}
+			m.picker = nil
+			m.refresh()
+		}
 	case "esc", "q":
 		m.picker = nil
 		m.refresh()
 	default:
-		// type-to-search: append printable runes to the filter
-		if rs := msg.Runes; len(rs) == 1 && rs[0] >= 0x20 && rs[0] != 0x7f {
+		// type-to-search: append printable runes to the filter (but not
+		// the reserved "y" = copy shortcut).
+		if rs := msg.Runes; len(rs) == 1 && rs[0] != 'y' && rs[0] >= 0x20 && rs[0] != 0x7f {
 			p.filter += string(rs[0])
 			p.applyFilter()
 		}

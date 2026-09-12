@@ -157,7 +157,7 @@ func (m *model) openResumePicker() {
 		return
 	}
 	display, ids := sessionDisplay(list)
-	m.picker = newPicker("lanjutkan sesi", display, ids, func(mm *model, id string) {
+	m.picker = newPicker("lanjutkan sesi (y salin jawaban)", display, ids, func(mm *model, id string) {
 		mm.loadSessionByID(id)
 	})
 }

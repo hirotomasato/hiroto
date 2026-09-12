@@ -8,7 +8,7 @@ import (
 )
 
 // helpLine is the bottom key-hint bar.
-const helpLine = "Enter kirim • Ctrl+P model • Ctrl+R sesi • Ctrl+S simpan • Ctrl+L bersih • ↑↓ history • scroll/PgUp-Dn geser • Ctrl+C keluar"
+const helpLine = "Enter kirim • Ctrl+P model • Ctrl+R sesi (y salin) • Ctrl+O salin jawaban • Ctrl+S simpan • Ctrl+L bersih • ↑↓ history • scroll/PgUp-Dn geser • Ctrl+C keluar"
 
 // layoutParts builds the frame sections. includeVP controls whether the
 // transcript viewport is part of the result:
