@@ -44,3 +44,24 @@ func TestIsRisky(t *testing.T) {
 		t.Error("read-only tools must not be risky")
 	}
 }
+
+func TestPlanModeReadOnly(t *testing.T) {
+	// PlanMode must refuse every risky tool, even if allowlisted or skipped.
+	a := &Agent{PlanMode: true, SkipPermissions: true, Allow: []string{"patch"}}
+	for name := range riskyTools {
+		if a.approveTool(name) {
+			t.Errorf("plan mode must refuse risky %q even with skip+allow", name)
+		}
+	}
+	// Read-only still fine.
+	for _, ro := range []string{"read_file", "search_files", "lsp", "web_search"} {
+		if !a.approveTool(ro) {
+			t.Errorf("plan mode must allow read-only %q", ro)
+		}
+	}
+	// Without plan mode, skip bypasses again.
+	a.PlanMode = false
+	if !a.approveTool("patch") {
+		t.Error("with plan mode off + skip, patch should be approved")
+	}
+}

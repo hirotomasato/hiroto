@@ -128,6 +128,11 @@ type model struct {
 	clarifyQuestion string
 	clarifyResp     chan string
 
+	// plan mode: when set, a /plan <task> investigation has finished and the
+	// proposed plan is waiting for the user to approve (/plan approve) or
+	// cancel (/plan cancel) before the real (write-capable) turn runs.
+	pendingPlan string
+
 	history []string // input history
 	histIdx int
 
@@ -428,6 +433,62 @@ func (m *model) runTurn(text string) {
 		streamCh <- assistantDoneMsg{failed: err != nil}
 		chMu.Unlock()
 	}()
+}
+
+// handlePlanCmd implements OMP-style plan mode. `/plan <task>` runs a read-only
+// investigation turn (PlanMode blocks all risky tools), then shows the proposed
+// plan and waits for `/plan approve` to execute or `/plan cancel` to abort.
+func (m *model) handlePlanCmd(fields []string, text string) {
+	sub := ""
+	if len(fields) >= 2 {
+		sub = strings.ToLower(fields[1])
+	}
+	switch sub {
+	case "approve":
+		if m.pendingPlan == "" {
+			m.flashMsg("tidak ada plan yang menunggu approval — mulai dengan /plan <task>", "error")
+			return
+		}
+		task := m.pendingPlan
+		m.pendingPlan = ""
+		m.ag.PlanMode = false
+		m.lines = append(m.lines, line{kind: lineInfo, text: stBanner.Render("◆ plan approved — mengeksekusi")})
+		m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
+		m.busy = true
+		m.refresh()
+		m.runTurn("Execute this plan now:\n" + task)
+	case "cancel":
+		if m.pendingPlan == "" {
+			m.flashMsg("tidak ada plan untuk dibatalkan", "error")
+			return
+		}
+		m.pendingPlan = ""
+		m.ag.PlanMode = false
+		m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("plan dibatalkan")})
+	default:
+		task := strings.TrimSpace(strings.TrimPrefix(text, "/plan"))
+		if task == "" {
+			m.flashMsg("pakai: /plan <task> — investigasi read-only, lalu /plan approve untuk eksekusi", "error")
+			return
+		}
+		if m.pendingPlan != "" {
+			m.flashMsg("sudah ada plan yang menunggu — /plan approve atau /plan cancel dulu", "error")
+			return
+		}
+		if m.busy {
+			m.flashMsg("tunggu agent selesai dulu", "error")
+			return
+		}
+		m.pendingPlan = task
+		m.ag.PlanMode = true
+		m.lines = append(m.lines, line{kind: lineUser, text: "/plan " + task})
+		m.lines = append(m.lines, line{kind: lineInfo, text: stBanner.Render("◆ merencanakan (read-only) — /plan approve untuk eksekusi")})
+		m.lines = append(m.lines, line{kind: lineAssistant, text: ""})
+		m.busy = true
+		m.refresh()
+		m.runTurn("Investigate and produce a concrete implementation plan for this task (read-only — do NOT modify files or run state-changing commands):\n\n" + task +
+			"\n\nList the exact files you will change and the edits you will make. End with PLAN READY.")
+	}
 }
 
 // copyText puts text on the system clipboard. It writes an OSC52 escape to
@@ -910,7 +971,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		switch fields := strings.Fields(text); fields[0] {
 		case "/help":
 			m.lines = append(m.lines,
-				line{kind: lineInfo, text: stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo [add|done <id>|undo <id>|unstick|clear] /quit")},
+				line{kind: lineInfo, text: stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo [add|done <id>|undo <id>|unstick|clear] /plan <task> [/plan approve|cancel] /quit")},
 			)
 		case "/quit", "/exit":
 			m.saveSession()
@@ -988,6 +1049,8 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			}
 		case "/todo":
 			m.handleTodoCmd(fields)
+		case "/plan":
+			m.handlePlanCmd(fields, text)
 		case "/retry":
 			m.handleRetry()
 		case "/undo":

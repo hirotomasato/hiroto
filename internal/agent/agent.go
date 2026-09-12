@@ -67,6 +67,10 @@ type Agent struct {
 	Allow []string
 	// SkipPermissions bypasses the approval gate entirely (--dangerously-skip).
 	SkipPermissions bool
+	// PlanMode restricts the agent to read-only tools (no writes/execution)
+	// while a /plan investigation is running. Cleared when the plan is
+	// approved and the real turn begins.
+	PlanMode bool
 
 	Messages  []llm.Message
 	Emit      func(Event) // UI callback
@@ -302,8 +306,12 @@ func isRisky(name string) bool { return riskyTools[name] }
 
 // approveTool decides whether a tool call may run. It returns false (and the
 // tool should be refused) when the tool is risky, not allowlisted, and
-// permissions are not skipped. Read-only tools always pass.
+// permissions are not skipped. Read-only tools always pass. PlanMode refuses
+// ALL risky tools (investigation is read-only).
 func (a *Agent) approveTool(name string) bool {
+	if a.PlanMode {
+		return !isRisky(name)
+	}
 	if a.SkipPermissions || !isRisky(name) {
 		return true
 	}
