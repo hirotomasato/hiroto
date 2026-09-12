@@ -31,7 +31,7 @@ if (!(Test-Path "$ConfigDir\config.yaml")) {
     @"
 model:
   base_url: http://localhost:20128/v1
-  model: your-model-name
+  model: ""
   api_key: `${HIROTO_API_KEY}
 
 agent:

@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +57,7 @@ func HomeDir() string {
 func Load() *Config {
 	c := &Config{}
 	c.Model.BaseURL = "http://localhost:20128/v1"
-	c.Model.Name = "teamo/glm-5.3-flash-free"
+	c.Model.Name = ""
 	c.Model.APIKeyEnv = ""
 	c.Agent.MaxTurns = 40
 	c.Agent.CompressBudget = 25000
@@ -74,6 +75,16 @@ func Load() *Config {
 		c.Agent.MaxTurns = 40
 	}
 	return c
+}
+
+// ValidateModel errors when no model is configured. Called by every
+// LLM-bound entry point so a fresh install fails with an actionable
+// message instead of a cryptic provider error mid-session.
+func (c *Config) ValidateModel() error {
+	if strings.TrimSpace(c.Model.Name) == "" {
+		return fmt.Errorf("no model configured — set model: in %s (or run: hiroto --set-model <name>)", filepath.Join(HomeDir(), "config.yaml"))
+	}
+	return nil
 }
 
 // APIKey resolves ${ENV} references in config against the environment and ~/.hiroto/.env.

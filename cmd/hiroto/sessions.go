@@ -298,6 +298,9 @@ func runOneShotContinue(cfg *config.Config, mem *memory.Store, query string) {
 		fmt.Fprintln(os.Stderr, "hiroto: gagal muat sesi:", err)
 		os.Exit(1)
 	}
+	if cfg.Model.Name == "" && sess.Model == "" {
+		requireModelOrExit(cfg)
+	}
 	ag := buildAgent(cfg, mem)
 	ag.Messages = fromStored(sess.Messages)
 	// -c continues a saved session, so it owns that session's checklist too.
@@ -328,10 +331,13 @@ func runResumeTUI(cfg *config.Config, mem *memory.Store, id string) error {
 	if err != nil {
 		return fmt.Errorf("sesi %q tidak ditemukan: %w", id, err)
 	}
+
 	ag := buildAgent(cfg, mem)
 	ag.Messages = fromStored(sess.Messages)
 	if sess.Model != "" {
 		ag.Client.SetModel(sess.Model)
+	} else {
+		requireModelOrExit(cfg)
 	}
 
 	// Load the transcript into the scrollback so the chat history is visible.

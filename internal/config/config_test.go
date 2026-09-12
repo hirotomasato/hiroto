@@ -82,3 +82,41 @@ func TestDotEnvStripsQuotes(t *testing.T) {
 		t.Errorf("dotEnvValue = %q, want %q", got, "quoted")
 	}
 }
+
+func TestValidateModelEmpty(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HIROTO_HOME", dir)
+	c := Load()
+	if err := c.ValidateModel(); err == nil {
+		t.Error("expected error for empty model name")
+	}
+}
+
+func TestValidateModelSet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HIROTO_HOME", dir)
+	c := Load()
+	c.Model.Name = "MiniMax-M3"
+	if err := c.ValidateModel(); err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+}
+
+func TestValidateModelWhitespace(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HIROTO_HOME", dir)
+	c := Load()
+	c.Model.Name = "   "
+	if err := c.ValidateModel(); err == nil {
+		t.Error("expected error for whitespace-only model name")
+	}
+}
+
+func TestValidateModelFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HIROTO_HOME", dir)
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("model:\n  model: from-file\n"), 0o644)
+	if err := Load().ValidateModel(); err != nil {
+		t.Errorf("model from config.yaml should validate: %v", err)
+	}
+}

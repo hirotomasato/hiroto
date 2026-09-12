@@ -612,22 +612,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			text := strings.TrimSpace(m.input.Value())
-		if text == "" {
-			return m, nil
-		}
-		if m.busy {
-			// Agent is working — the user can still type, and Enter
-			// delivers the text as an out-of-band /steer, just like
-			// Hermes CLI. The agent picks it up on its next tool-call
-			// boundary and adjusts course.
-			m.sendSteer(text)
-			m.input.SetValue("")
-			m.input.Placeholder = "agent sibuk — ketik untuk mengarahkan…"
-			m.refresh()
-			return m, nil
-		}
-		m.clearFlash()
-		return m.handleSubmit(text)
+			if text == "" {
+				return m, nil
+			}
+			if m.busy {
+				// Agent is working — the user can still type, and Enter
+				// delivers the text as an out-of-band /steer, just like
+				// Hermes CLI. The agent picks it up on its next tool-call
+				// boundary and adjusts course.
+				m.sendSteer(text)
+				m.input.SetValue("")
+				m.input.Placeholder = "agent sibuk — ketik untuk mengarahkan…"
+				m.refresh()
+				return m, nil
+			}
+			m.clearFlash()
+			return m.handleSubmit(text)
 		case tea.KeyUp:
 			if len(m.history) > 0 && m.histIdx < len(m.history)-1 {
 				m.histIdx++
@@ -1420,7 +1420,11 @@ func main() {
 		return
 	}
 
-	// wire agent: skills + registry + memory + web backends
+	if err := cfg.ValidateModel(); err != nil {
+		fmt.Fprintln(os.Stderr, "hiroto:", err)
+		os.Exit(1)
+	}
+
 	ag := buildAgent(cfg, mem)
 	ss := session.New()
 
@@ -1525,11 +1529,20 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 			})
 		}
 	}
+
 	return ag
+}
+
+func requireModelOrExit(cfg *config.Config) {
+	if err := cfg.ValidateModel(); err != nil {
+		fmt.Fprintln(os.Stderr, "hiroto:", err)
+		os.Exit(1)
+	}
 }
 
 // runOneShot executes a single query headlessly (no TUI), streaming to stdout.
 func runOneShot(cfg *config.Config, mem *memory.Store, query string) {
+	requireModelOrExit(cfg)
 	// One-shot runs get their own throwaway checklist id, so they can't pick up
 	// (or leave behind) a plan belonging to an interactive session.
 	os.Setenv(tools.EnvSessionID, newSessionID())
@@ -1592,6 +1605,7 @@ func runToolCmd(name string) {
 
 // runAPI starts the OpenAI-compatible API server.
 func runAPI(cfg *config.Config, mem *memory.Store) {
+	requireModelOrExit(cfg)
 	port := cfg.API.Port
 	if port == 0 {
 		port = 20129

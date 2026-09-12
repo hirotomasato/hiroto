@@ -75,7 +75,7 @@ if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
     cat > "$CONFIG_DIR/config.yaml" << 'YEOF'
 model:
   base_url: http://localhost:20128/v1
-  model: your-model-name
+  model: ""
   api_key: ${HIROTO_API_KEY}
 
 agent:
