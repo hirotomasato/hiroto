@@ -35,7 +35,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/health", s.handleHealth)
 
 	s.srv = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.port),
+		Addr:         fmt.Sprintf("127.0.0.1:%d", s.port),
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Minute, // long for streaming
@@ -116,7 +116,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	models, _ := s.ag.Client.ListModels(ctx)
 	if len(models) == 0 {
-		models = []string{s.ag.Client.Model}
+		models = []string{s.ag.Client.Model()}
 	}
 
 	var entries []modelEntry
@@ -171,8 +171,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Create a shallow agent copy for this request, including the client
 	// so concurrent requests don't race on the shared model name.
 	ag := *s.ag
-	clientCopy := *s.ag.Client
-	ag.Client = &clientCopy
+	ag.Client = llm.New(s.ag.Client.BaseURL, s.ag.Client.APIKey, s.ag.Client.Model())
 	ag.Messages = messages
 
 	if req.Stream {
@@ -184,7 +183,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBlocking(w http.ResponseWriter, r *http.Request, ag *agent.Agent, userText, model string) {
 	if model != "" {
-		ag.Client.Model = model
+		ag.Client.SetModel(model)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
@@ -203,7 +202,7 @@ func (s *Server) handleBlocking(w http.ResponseWriter, r *http.Request, ag *agen
 		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
-		Model:   ag.Client.Model,
+		Model:   ag.Client.Model(),
 		Choices: []chatChoice{{
 			Index: 0,
 			Message: chatMessage{
@@ -220,7 +219,7 @@ func (s *Server) handleBlocking(w http.ResponseWriter, r *http.Request, ag *agen
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, ag *agent.Agent, userText, model string) {
 	if model != "" {
-		ag.Client.Model = model
+		ag.Client.SetModel(model)
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -245,7 +244,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, ag *agent.
 			"id":      chunkID,
 			"object":  "chat.completion.chunk",
 			"created": created,
-			"model":   ag.Client.Model,
+			"model":   ag.Client.Model(),
 			"choices": []map[string]any{{
 				"index": 0,
 				"delta": map[string]string{"content": chunk},
@@ -261,7 +260,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, ag *agent.
 			"id":      chunkID,
 			"object":  "chat.completion.chunk",
 			"created": created,
-			"model":   ag.Client.Model,
+			"model":   ag.Client.Model(),
 			"choices": []map[string]any{{
 				"index":         0,
 				"delta":         map[string]string{},

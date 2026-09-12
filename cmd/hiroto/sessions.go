@@ -74,7 +74,7 @@ func (m *model) saveSession() {
 	sess := &session.Session{
 		ID:        m.sessID,
 		Title:     firstUserText(m.ag.Messages, 60),
-		Model:     m.ag.Client.Model,
+		Model:     m.ag.Client.Model(),
 		Reasoning: m.reasoning,
 		Created:   time.Now(),
 		Updated:   time.Now(),
@@ -173,7 +173,7 @@ func (m *model) loadSessionByID(id string) bool {
 	m.ag.Messages = fromStored(sess.Messages)
 	m.sessID = sess.ID
 	if sess.Model != "" {
-		m.ag.Client.Model = sess.Model
+		m.ag.Client.SetModel(sess.Model)
 	}
 	if sess.Reasoning != "" {
 		m.reasoning = sess.Reasoning
@@ -204,9 +204,9 @@ func (m *model) openModelPicker() {
 		m.refresh()
 		return
 	}
-	display, values, headers := groupModelsByProvider(models, m.ag.Client.Model)
+	display, values, headers := groupModelsByProvider(models, m.ag.Client.Model())
 	m.picker = newPicker("pilih model", display, values, func(mm *model, name string) {
-		mm.ag.Client.Model = name
+		mm.ag.Client.SetModel(name)
 		mm.cfg.Model.Name = name
 		config.SaveModel(name)
 		mm.lines = append(mm.lines, line{lineInfo, stMuted.Render("model: " + name + " (tersimpan)")})
@@ -317,7 +317,7 @@ func runOneShotContinue(cfg *config.Config, mem *memory.Store, query string) {
 	sess.Messages = toStored(ag.Messages)
 	sess.Todos = todosToStored(tools.SharedTodo())
 	sess.Updated = time.Now()
-	sess.Model = ag.Client.Model
+	sess.Model = ag.Client.Model()
 	_ = ss.Save(sess)
 }
 
@@ -331,7 +331,7 @@ func runResumeTUI(cfg *config.Config, mem *memory.Store, id string) error {
 	ag := buildAgent(cfg, mem)
 	ag.Messages = fromStored(sess.Messages)
 	if sess.Model != "" {
-		ag.Client.Model = sess.Model
+		ag.Client.SetModel(sess.Model)
 	}
 
 	// Load the transcript into the scrollback so the chat history is visible.

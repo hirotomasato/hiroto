@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // Message types follow the OpenAI chat-completion schema (what Hiroto's providers speak).
@@ -78,17 +79,33 @@ type response struct {
 type Client struct {
 	BaseURL string
 	APIKey  string
-	Model   string
 	HTTP    *http.Client
+
+	mu    sync.RWMutex
+	model string
 }
 
 func New(baseURL, apiKey, model string) *Client {
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), APIKey: apiKey, Model: model, HTTP: &http.Client{}}
+	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), APIKey: apiKey, model: model, HTTP: &http.Client{}}
+}
+
+// Model returns the current model name (thread-safe).
+func (c *Client) Model() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.model
+}
+
+// SetModel updates the model name (thread-safe).
+func (c *Client) SetModel(m string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.model = m
 }
 
 // Chat performs a non-streaming completion. Streaming fallback handled by Stream().
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Message, error) {
-	reqBody, _ := json.Marshal(request{Model: c.Model, Messages: messages, Tools: tools, Temperature: 0.4})
+	reqBody, _ := json.Marshal(request{Model: c.Model(), Messages: messages, Tools: tools, Temperature: 0.4})
 	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
 		return Message{}, err
@@ -124,7 +141,7 @@ type StreamDelta struct {
 
 // Stream performs an SSE-streaming completion; on stream failure callers should fall back to Chat.
 func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, onText func(string)) (Message, error) {
-	reqBody, _ := json.Marshal(request{Model: c.Model, Messages: messages, Tools: tools, Stream: true, Temperature: 0.4})
+	reqBody, _ := json.Marshal(request{Model: c.Model(), Messages: messages, Tools: tools, Stream: true, Temperature: 0.4})
 	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
 		return Message{}, err

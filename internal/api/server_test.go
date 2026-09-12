@@ -16,11 +16,7 @@ import (
 
 func testAgent() *agent.Agent {
 	return &agent.Agent{
-		Client: &llm.Client{
-			BaseURL: "http://localhost:9999/v1",
-			Model:   "test-model",
-			HTTP:    &http.Client{Timeout: 100 * time.Millisecond},
-		},
+		Client:   llm.New("http://localhost:9999/v1", "", "test-model"),
 		Reg:      tools.NewRegistry(),
 		MaxTurns: 1,
 	}
@@ -116,7 +112,7 @@ func TestHandleChatBlockingError(t *testing.T) {
 func TestHandleChatConcurrentClientCopy(t *testing.T) {
 	// Verify that the client copy in handleChat isolates the model name.
 	ag := testAgent()
-	originalModel := ag.Client.Model
+	originalModel := ag.Client.Model()
 	s := New(ag, 0)
 
 	// Send a request with a different model. The client copy should get the
@@ -131,8 +127,8 @@ func TestHandleChatConcurrentClientCopy(t *testing.T) {
 	// already made.
 	s.handleChat(w, req)
 
-	if ag.Client.Model != originalModel {
-		t.Errorf("shared agent model changed: %s → %s", originalModel, ag.Client.Model)
+	if ag.Client.Model() != originalModel {
+		t.Errorf("shared agent model changed: %s → %s", originalModel, ag.Client.Model())
 	}
 }
 
