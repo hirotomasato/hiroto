@@ -1,7 +1,7 @@
 # Hiroto
 
 <p align="center">
-  <img src="assets/hiroto.svg" alt="Hiroto — personal agent · go core · cyberteam" width="720">
+  <img src="assets/hiroto.svg" alt="Hiroto — personal agent" width="720">
 </p>
 
 > Your terminal, your agent. Write code, hunt bugs, automate workflows — all from the command line.
@@ -16,7 +16,7 @@
 
 ## What is this
 
-Hiroto is an AI agent that lives in your terminal. Not a web chatbot — it runs shell commands, opens browsers, scans code, hunts bugs, writes reports, and connects to Telegram. All from your keyboard.
+Hiroto is an AI agent that lives in your terminal. Not a web chatbot — it runs shell commands, opens browsers, scans code, hunts bugs, writes reports. All from your keyboard.
 
 Built from scratch in Go. No Python runtime needed for the core. 24MB binary, runs on Linux, macOS, and Windows.
 
@@ -30,7 +30,7 @@ One command:
 curl -fsSL https://raw.githubusercontent.com/hirotomasato/hiroto/main/install.sh | bash
 ```
 
-That installs Hiroto, security tools, and 240+ skills automatically. Requires Go 1.26+, Node.js, Python 3, and Chrome.
+That installs Hiroto, security tools, and 180+ skills automatically. Requires Go 1.26+, Node.js, Python 3, and Chrome.
 
 Windows:
 
@@ -57,7 +57,6 @@ hiroto                  # Interactive TUI
 hiroto -q "who am i?"   # One-shot, prints answer
 hiroto -c "prompt"      # Continue last session (one-shot)
 hiroto --resume <id>    # Reopen a saved session in the TUI
-hiroto gateway          # Telegram bot
 hiroto --api            # OpenAI-compatible API server
 hiroto --update         # Check for updates
 ```
@@ -156,21 +155,6 @@ Endpoints: `/v1/chat/completions`, `/v1/models`, `/health`.
 
 ---
 
-## Telegram gateway
-
-```bash
-hiroto gateway
-```
-
-On first run, you're prompted for a Telegram bot token (from @BotFather). The token is stored in `.env`, never in config.yaml. The bot supports:
-
-- Per-chat isolated conversations (no context leakage)
-- Live text + tool activity streaming
-- Persistent sessions (survive restarts, resume via `/resume`)
-- Full command set: `/model` `/resume` `/memory` `/skills` `/retry` `/undo` `/status` `/sessions`
-
----
-
 ## What it can do
 
 **Terminal & files:** shell commands, read, write, edit, background processes, pipe chaining. LSP diagnostics auto-run after writes (go vet, py_compile, cargo check, tsc).
@@ -181,7 +165,7 @@ On first run, you're prompted for a Telegram bot token (from @BotFather). The to
 
 **Safety:** auto git checkpoint before write/patch/terminal. `/rollback` to undo. Dangerous command detection (rm -rf, git push --force, DROP, dd, chmod).
 
-**Security:** scan secrets, 240+ skills (recon, exploit, reporting), merge reports.
+**Security:** scan secrets, 180+ skills (recon, exploit, reporting), merge reports.
 
 **Data:** web search, extract page content, session search, vision (image analysis).
 
@@ -210,14 +194,14 @@ On first run, you're prompted for a Telegram bot token (from @BotFather). The to
 
 ## Skills
 
-240+ skills included. Mention a skill name and the agent loads and runs it.
+180+ skills included. Mention a skill name and the agent loads and runs it.
 
 ```
 recon     → subfinder + dnsx + httpx
 hunt-xss  → 174 XSS bug bounty patterns
 hunt-sqli → SQL injection hunting
 antislop  → anti-AI-slop output filter
-...and 236+ more
+...and 176+ more
 ```
 
 ---
@@ -225,7 +209,7 @@ antislop  → anti-AI-slop output filter
 ## Project layout
 
 ```
-cmd/hiroto/          Entry point: TUI, one-shot, gateway, API server
+cmd/hiroto/          Entry point: TUI, one-shot, API server
 internal/
   agent/             Agent loop, system prompt, compression, steer
   api/               OpenAI-compatible HTTP server
@@ -237,8 +221,7 @@ internal/
   config/            YAML config + .env resolver
   web/               Web search + extract
   plugin/            Plugin loader + MCP client
-  gateway/           Telegram bot
-skills/              240+ bundled skills
+skills/              180+ bundled skills
 ```
 
 ---
@@ -272,4 +255,4 @@ MIT — [LICENSE](LICENSE)
 
 ---
 
-Built from scratch in Go. 24MB binary. 240+ skills. 26 tools. 31 slash commands. API server. Telegram gateway. No AI framework dependencies.
+Built from scratch in Go. 24MB binary. 180+ skills. 26 tools. 31 slash commands. API server. No AI framework dependencies.

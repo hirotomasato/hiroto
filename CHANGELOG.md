@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Gateway removal
+- Telegram gateway dihapus sepenuhnya: paket `internal/gateway`, command `hiroto gateway`, config `gateway.*`, dan dependensi `go-telegram-bot-api` dihilangkan
+- Fokus kembali ke core: TUI + one-shot + API server
+
 ## 0.6.1 — 2026-09-02
 
 ### Task list (fix: task nyangkut di panel)

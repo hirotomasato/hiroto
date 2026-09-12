@@ -113,8 +113,9 @@ func bannerLines(width int, modelInfo string, skillCount int) []string {
 	rule := rules(width)
 
 	var out []string
-	out = append(out, "")   // breathing room above the banner
 	out = append(out, rule) // top rule
+	out = append(out, "")   // breathing room below top rule
+	out = append(out, rule) // second rule frames the banner
 
 	bannerW := ruleWidth(width)
 	if width >= 60 {
@@ -126,7 +127,7 @@ func bannerLines(width int, modelInfo string, skillCount int) []string {
 		}
 	}
 	out = append(out,
-		centerPad(stTagline.Render("personal agent · go core · cyberteam"), bannerW),
+		centerPad(stTagline.Render("v"+version+" · personal agent"), bannerW),
 		rule,
 		"",
 	)

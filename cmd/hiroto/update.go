@@ -48,12 +48,45 @@ func checkUpdate() (latest string, available bool) {
 // Without the sync step, `go install` writes to $GOBIN (~/go/bin) while the
 // running binary may live elsewhere (e.g. ~/.local/bin) — a "successful"
 // update that the user never actually runs.
+//
+// Security: verifies the installed binary reports the expected version before
+// syncing it over the running executable. A mismatch means the build produced
+// something unexpected — abort rather than replace a known-good binary.
 func doUpdate() (string, error) {
+	latest, available := checkUpdate()
+	if !available {
+		return "", fmt.Errorf("no update available")
+	}
+
 	cmd := exec.Command("go", "install", "github.com/hirotomasato/hiroto/cmd/hiroto@latest")
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("update failed: %v\n%s", err, string(out))
+	}
+
+	// Verify the freshly built binary reports the expected version.
+	gobinOut, err := exec.Command("go", "env", "GOBIN").Output()
+	if err != nil {
+		return "", fmt.Errorf("update verification failed: could not resolve GOBIN: %v", err)
+	}
+	gobin := strings.TrimSpace(string(gobinOut))
+	if gobin == "" {
+		gopath, err := exec.Command("go", "env", "GOPATH").Output()
+		if err != nil {
+			return "", fmt.Errorf("update verification failed: could not resolve GOPATH: %v", err)
+		}
+		gobin = filepath.Join(strings.TrimSpace(string(gopath)), "bin")
+	}
+	fresh := filepath.Join(gobin, binaryName())
+	// --banner prints version in the tagline without needing a provider.
+	verifyCmd := exec.Command(fresh, "--banner", "80")
+	verifyOut, verifyErr := verifyCmd.Output()
+	if verifyErr != nil {
+		return "", fmt.Errorf("update verification failed: could not run fresh binary: %v", verifyErr)
+	}
+	if !strings.Contains(string(verifyOut), "v"+latest) {
+		return "", fmt.Errorf("update verification failed: expected v%s, got unexpected version", latest)
 	}
 
 	notes := []string{strings.TrimSpace(string(out))}
