@@ -46,6 +46,16 @@ func (m *model) layoutParts(includeVP bool) []string {
 			parts = append(parts, stFlashInfo.Render(m.flash))
 		}
 	}
+	// Live loading indicator. Rendered as CHROME (fresh on every View) so
+	// the spinner animates during long LLM waits — inside the viewport the
+	// content only updates on refresh(), which froze the frame mid-think.
+	if m.busy {
+		label := "berpikir…"
+		if m.streaming {
+			label = "menulis…"
+		}
+		parts = append(parts, stMuted.Render(m.spinner.View()+" "+label))
+	}
 	parts = append(parts, stInput.Render(m.input.View()))
 	parts = append(parts, m.statusBarText())
 	parts = append(parts, stHelp.Render(helpLine))

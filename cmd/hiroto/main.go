@@ -1253,13 +1253,6 @@ func (m *model) refresh() {
 		b.WriteString(text + "\n")
 	}
 	content := b.String()
-	if m.busy {
-		label := "berpikir…"
-		if m.streaming {
-			label = "menulis…"
-		}
-		content += stMuted.Render(m.spinner.View() + " " + label)
-	}
 	atBottom := m.vp.AtBottom()
 	m.recalcViewport()
 	m.vp.SetContent(content)
