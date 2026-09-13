@@ -28,12 +28,13 @@ type Config struct {
 	Skills struct {
 		Dirs []string `yaml:"dirs"` // extra skill dirs; ~/.hiroto/skills always loaded
 	} `yaml:"skills"`
-	// Allow lists tools the agent may run WITHOUT interactive approval
-	// (e.g. ["patch", "write_file", "terminal"]). Tools NOT in this list that
-	// are classified risky are rejected in headless/API/one-shot mode. Empty =
-	// prompt-mode default. Use --dangerously-skip-permissions to bypass all.
-	Allow []string `yaml:"allow"`
-	API   struct {
+	// Ask lists tools that require interactive approval before running
+	// (e.g. ["terminal", "write_file"]). EMPTY by default = no prompts,
+	// matching OMP: the agent runs tools freely. Add a tool here only if
+	// you want to be asked each time it runs. --dangerously-skip-permissions
+	// ignores even this list.
+	Ask []string `yaml:"ask"`
+	API struct {
 		Port int `yaml:"port"` // API server port (default 20129)
 	} `yaml:"api"`
 	Plugins struct {

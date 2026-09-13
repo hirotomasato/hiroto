@@ -1076,11 +1076,17 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			m.handlePlanCmd(fields, text)
 		case "/allow":
 			if len(fields) < 2 {
-				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("pakai: /allow <tool> — izinkan tool tanpa approval lagi di sesi ini (contoh: /allow write_file)")})
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("pakai: /allow <tool> — jangan tanya lagi untuk tool ini di sesi ini (contoh: /allow terminal)")})
 			} else {
 				name := fields[1]
-				m.ag.Allow = append(m.ag.Allow, name)
-				m.lines = append(m.lines, line{kind: lineInfo, text: stBanner.Render("◆ tool diizinkan untuk sesi ini: " + name + " — tambah ke `allow:` di config.yaml untuk permanen")})
+				kept := m.ag.Ask[:0]
+				for _, t := range m.ag.Ask {
+					if t != name {
+						kept = append(kept, t)
+					}
+				}
+				m.ag.Ask = kept
+				m.lines = append(m.lines, line{kind: lineInfo, text: stBanner.Render("◆ " + name + " tidak akan ditanya lagi sesi ini — hapus dari `ask:` di config.yaml untuk permanen")})
 			}
 		case "/retry":
 			m.handleRetry()
@@ -1723,7 +1729,7 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 		CompressKeepTurns: cfg.Agent.CompressKeepTurns,
 		RetryAttempts:     2,
 		Workdir:           workdir(),
-		Allow:             cfg.Allow,
+		Ask:               cfg.Ask,
 		SkipPermissions:   skipPermissions,
 	}
 	// Model list is fetched asynchronously after the TUI boots (see

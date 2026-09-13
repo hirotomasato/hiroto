@@ -62,9 +62,9 @@ type Agent struct {
 	CompressKeepTurns int // recent turns to keep intact (default 6)
 	RetryAttempts     int // auto-retry on provider errors (default 2)
 
-	// Allow lists tool names permitted without interactive approval. Risky
-	// tools not in this list are rejected (headless) — see approveTool.
-	Allow []string
+	// Ask lists tools that require interactive approval before running. Empty
+	// (default) = no prompts — tools run freely (OMP parity).
+	Ask []string
 	// SkipPermissions bypasses the approval gate entirely (--dangerously-skip).
 	SkipPermissions bool
 	// PlanMode restricts the agent to read-only tools (no writes/execution)
@@ -304,23 +304,23 @@ var riskyTools = map[string]bool{
 // isRisky reports whether a tool needs approval before running.
 func isRisky(name string) bool { return riskyTools[name] }
 
-// approveTool decides whether a tool call may run. It returns false (and the
-// tool should be refused) when the tool is risky, not allowlisted, and
-// permissions are not skipped. Read-only tools always pass. PlanMode refuses
-// ALL risky tools (investigation is read-only).
+// approveTool decides whether a tool call may run without asking. Default is
+// permissive (OMP parity): tools run freely. A tool requires approval only if
+// the user listed it in the Ask config. SkipPermissions ignores Ask entirely.
+// PlanMode refuses all risky tools (investigation stays read-only).
 func (a *Agent) approveTool(name string) bool {
 	if a.PlanMode {
 		return !isRisky(name)
 	}
-	if a.SkipPermissions || !isRisky(name) {
+	if a.SkipPermissions {
 		return true
 	}
-	for _, t := range a.Allow {
+	for _, t := range a.Ask {
 		if t == name {
-			return true
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // executeToolCalls runs a batch of tool calls and returns their tool-result
@@ -341,7 +341,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, calls []llm.ToolCall) []ll
 			// Risky tool not allowlisted (and permissions not skipped): refuse so
 			// the model can adjust instead of mutating state without consent.
 			result = tools.Result{
-				Output:  fmt.Sprintf("tool %q requires approval — ketik /allow %s untuk mengizinkan di sesi ini, tambah ke `allow:` di config.yaml, atau jalankan dengan --dangerously-skip-permissions", name, name),
+				Output:  fmt.Sprintf("tool %q butuh persetujuan — ketik /allow %s untuk mengizinkan di sesi ini, atau hapus dari `ask:` di config.yaml", name, name),
 				IsError: true,
 			}
 		} else if tool, ok := a.Reg.Get(name); !ok {
