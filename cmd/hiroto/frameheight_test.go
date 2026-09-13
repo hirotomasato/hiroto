@@ -276,3 +276,30 @@ func TestLiveToolBoxCapped(t *testing.T) {
 		t.Errorf("head line-0 should have been dropped: %q", last.text[:40])
 	}
 }
+
+// TestNoLineCollision: a completed tool line must NOT receive a later tool's
+// streamed chunks (the bug that garbled the transcript — an approval error
+// stuck to a prior ✓ line). New streams start their own live box.
+func TestNoLineCollision(t *testing.T) {
+	m := tinyModel(t)
+	u, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := u.(model)
+
+	u, _ = mm.Update(eventMsg(agent.Event{Type: "tool_start", ToolName: "write_file", ToolArgs: `{}`}))
+	mm = u.(model)
+	u, _ = mm.Update(eventMsg(agent.Event{Type: "tool_end", ToolName: "write_file", ToolArgs: `{}`, Duration: 1, Text: "patched foo.go"}))
+	mm = u.(model)
+	completedIdx := len(mm.lines) - 1
+	completedText := mm.lines[completedIdx].text
+
+	u, _ = mm.Update(toolStreamMsg{tool: "terminal", chunk: "fresh output\n"})
+	mm = u.(model)
+
+	if mm.lines[completedIdx].text != completedText {
+		t.Errorf("completed line mutated by new stream:\n  before: %q\n  after:  %q", completedText, mm.lines[completedIdx].text)
+	}
+	last := mm.lines[len(mm.lines)-1]
+	if !strings.Contains(last.text, "fresh output") {
+		t.Errorf("new stream not on its own line: %q", last.text)
+	}
+}

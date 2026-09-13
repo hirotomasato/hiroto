@@ -89,6 +89,10 @@ type line struct {
 	// and glamour runs once in endAssistantLine(). A resize resets them so
 	// re-wrap happens at the new width.
 	mdRendered bool
+	// live marks a tool line as still receiving streamed output, so chunks
+	// accumulate into it. Cleared when the tool reports its final result —
+	// prevents a new tool's chunks from colliding with a completed line.
+	live bool
 }
 
 type (
@@ -815,9 +819,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tool_start":
 			m.activityText = toolActivity(msg.ToolName, msg.ToolArgs)
 			m.activityStart = time.Now()
-			m.lines = append(m.lines, m.renderAgentEvent(msg))
+			// Mark the new tool line live so streamed output accumulates here.
+			nl := m.renderAgentEvent(msg)
+			nl.live = true
+			m.lines = append(m.lines, nl)
 		case "tool_end", "error", "compress_start", "compress_end":
 			m.activityText = ""
+			// Clear any live marker so a later tool's stream starts a fresh box
+			// instead of colliding with this completed line.
+			for i := range m.lines {
+				m.lines[i].live = false
+			}
 			m.lines = append(m.lines, m.renderAgentEvent(msg))
 		}
 		if msg.Type == "tool_end" || msg.Type == "error" {
@@ -982,7 +994,7 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 		switch fields := strings.Fields(text); fields[0] {
 		case "/help":
 			m.lines = append(m.lines,
-				line{kind: lineInfo, text: stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo [add|done <id>|undo <id>|unstick|clear] /plan <task> [/plan approve|cancel] /quit")},
+				line{kind: lineInfo, text: stMuted.Render("/help /new /resume /compress /update /upgrade /skills /model /memory /memory add <teks> /memory del <id> /retry /undo /diff /stop /steer <pesan> /verbose /usage /rollback [save|restore <hash>] /prompt /bg /goal /branch /copy /title /reload /image /config /reasoning /todo [add|done <id>|undo <id>|unstick|clear] /allow <tool> /plan <task> [/plan approve|cancel] /quit")},
 			)
 		case "/quit", "/exit":
 			m.saveSession()
@@ -1062,6 +1074,14 @@ func (m *model) handleSubmit(text string) (tea.Model, tea.Cmd) {
 			m.handleTodoCmd(fields)
 		case "/plan":
 			m.handlePlanCmd(fields, text)
+		case "/allow":
+			if len(fields) < 2 {
+				m.lines = append(m.lines, line{kind: lineInfo, text: stMuted.Render("pakai: /allow <tool> — izinkan tool tanpa approval lagi di sesi ini (contoh: /allow write_file)")})
+			} else {
+				name := fields[1]
+				m.ag.Allow = append(m.ag.Allow, name)
+				m.lines = append(m.lines, line{kind: lineInfo, text: stBanner.Render("◆ tool diizinkan untuk sesi ini: " + name + " — tambah ke `allow:` di config.yaml untuk permanen")})
+			}
 		case "/retry":
 			m.handleRetry()
 		case "/undo":
@@ -1351,8 +1371,13 @@ const maxLiveToolLines = 12
 // same box in real time. If there is no current tool line, start one. The box
 // is capped to the last maxLiveToolLines lines (auto-scroll to the tail).
 func (m *model) appendToolStream(tool, chunk string) {
-	if len(m.lines) == 0 || m.lines[len(m.lines)-1].kind != lineTool {
-		m.lines = append(m.lines, line{kind: lineTool, text: stMuted.Render("⚡ " + tool + ": ")})
+	// Only extend a line still marked live (the in-progress ⚒ tool_start
+	// line). A completed tool line must not receive a new tool's chunks —
+	// that collision garbles the transcript (e.g. an approval error stuck to
+	// a prior ✓ line).
+	if len(m.lines) == 0 || m.lines[len(m.lines)-1].kind != lineTool || !m.lines[len(m.lines)-1].live {
+		nl := line{kind: lineTool, text: stMuted.Render("⚡ " + tool + ": "), live: true}
+		m.lines = append(m.lines, nl)
 	}
 	l := &m.lines[len(m.lines)-1]
 	l.text += stMuted.Render(chunk)

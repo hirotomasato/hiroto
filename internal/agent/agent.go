@@ -341,7 +341,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, calls []llm.ToolCall) []ll
 			// Risky tool not allowlisted (and permissions not skipped): refuse so
 			// the model can adjust instead of mutating state without consent.
 			result = tools.Result{
-				Output:  fmt.Sprintf("tool %q requires approval — add it to `allow:` in config.yaml or run with --dangerously-skip-permissions", name),
+				Output:  fmt.Sprintf("tool %q requires approval — ketik /allow %s untuk mengizinkan di sesi ini, tambah ke `allow:` di config.yaml, atau jalankan dengan --dangerously-skip-permissions", name, name),
 				IsError: true,
 			}
 		} else if tool, ok := a.Reg.Get(name); !ok {
