@@ -1341,15 +1341,37 @@ func (m *model) appendStream(chunk string) {
 	l.text += chunk
 }
 
+// maxLiveToolLines bounds the live (streaming) tool-output box so a verbose
+// command doesn't flood the viewport — we keep the most recent lines (the
+// tail) so the user sees current activity, mirroring OMP's tidy live box.
+const maxLiveToolLines = 12
+
 // appendToolStream accumulates a live chunk from a running tool into the most
 // recent tool line (the ⚒ … line from tool_start), so output streams into the
-// same box in real time. If there is no current tool line, start one.
+// same box in real time. If there is no current tool line, start one. The box
+// is capped to the last maxLiveToolLines lines (auto-scroll to the tail).
 func (m *model) appendToolStream(tool, chunk string) {
 	if len(m.lines) == 0 || m.lines[len(m.lines)-1].kind != lineTool {
 		m.lines = append(m.lines, line{kind: lineTool, text: stMuted.Render("⚡ " + tool + ": ")})
 	}
 	l := &m.lines[len(m.lines)-1]
 	l.text += stMuted.Render(chunk)
+	// Cap the live box to the last maxLiveToolLines lines so it scrolls like
+	// OMP rather than flooding the viewport. Chunks are line-based (the
+	// terminal tool forwards one line at a time), so raw "\n" count ≈ rows.
+	if n := strings.Count(l.text, "\n"); n > maxLiveToolLines {
+		drop := n - maxLiveToolLines
+		idx := 0
+		for dropped := 0; dropped < drop && idx < len(l.text); {
+			if l.text[idx] == '\n' {
+				dropped++
+			}
+			idx++
+		}
+		if idx <= len(l.text) {
+			l.text = "  …\n" + l.text[idx:]
+		}
+	}
 }
 
 func (m *model) endAssistantLine() {

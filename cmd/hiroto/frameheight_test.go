@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -246,5 +247,32 @@ func TestToolStreamAccumulates(t *testing.T) {
 	last := mm.lines[len(mm.lines)-1]
 	if !strings.Contains(last.text, "compiling foo") || !strings.Contains(last.text, "compiling bar") {
 		t.Errorf("chunks not accumulated: %q", last.text)
+	}
+}
+
+// TestLiveToolBoxCapped: the live (streaming) tool-output box must stay
+// bounded — keeping only the most recent maxLiveToolLines rows (auto-scroll
+// to the tail) so a verbose command doesn't flood the viewport.
+func TestLiveToolBoxCapped(t *testing.T) {
+	m := tinyModel(t)
+	u, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := u.(model)
+	u, _ = mm.Update(eventMsg(agent.Event{Type: "tool_start", ToolName: "terminal", ToolArgs: `{"command":"seq 1 100"}`}))
+	mm = u.(model)
+
+	for i := range 30 {
+		u, _ = mm.Update(toolStreamMsg{tool: "terminal", chunk: fmt.Sprintf("line-%d\n", i)})
+		mm = u.(model)
+	}
+	last := mm.lines[len(mm.lines)-1]
+	rows := strings.Count(last.text, "\n")
+	if rows > maxLiveToolLines+1 { // +1 for the "…" header line
+		t.Errorf("live box not capped: %d rows (max %d)", rows, maxLiveToolLines)
+	}
+	if !strings.Contains(last.text, "line-29") {
+		t.Errorf("tail line-29 missing: %q", last.text)
+	}
+	if strings.Contains(last.text, "line-0\n") {
+		t.Errorf("head line-0 should have been dropped: %q", last.text[:40])
 	}
 }
