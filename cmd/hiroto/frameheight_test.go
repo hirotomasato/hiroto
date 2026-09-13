@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/hirotomasato/hiroto/internal/agent"
 	"github.com/hirotomasato/hiroto/internal/llm"
 	"github.com/hirotomasato/hiroto/internal/tools"
 )
@@ -219,5 +220,31 @@ func TestStripSeveredANSI(t *testing.T) {
 	severed := "prefix [38;5;252m suffix"
 	if got := stripSeveredANSI(severed); strings.Contains(got, "[38;5;252m") {
 		t.Errorf("severed CSI not neutralized: %q", got)
+	}
+}
+
+// TestToolStreamAccumulates: live chunks from a running tool (terminal) must
+// accumulate into the current tool line — one box streaming in real time —
+// rather than each chunk spawning its own line.
+func TestToolStreamAccumulates(t *testing.T) {
+	m := tinyModel(t)
+	u, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := u.(model)
+
+	u, _ = mm.Update(eventMsg(agent.Event{Type: "tool_start", ToolName: "terminal", ToolArgs: `{"command":"go build"}`}))
+	mm = u.(model)
+	before := len(mm.lines)
+
+	u, _ = mm.Update(toolStreamMsg{tool: "terminal", chunk: "compiling foo\n"})
+	mm = u.(model)
+	u, _ = mm.Update(toolStreamMsg{tool: "terminal", chunk: "compiling bar\n"})
+	mm = u.(model)
+
+	if len(mm.lines) != before {
+		t.Fatalf("stream chunks should accumulate into one line, got %d want %d", len(mm.lines), before)
+	}
+	last := mm.lines[len(mm.lines)-1]
+	if !strings.Contains(last.text, "compiling foo") || !strings.Contains(last.text, "compiling bar") {
+		t.Errorf("chunks not accumulated: %q", last.text)
 	}
 }

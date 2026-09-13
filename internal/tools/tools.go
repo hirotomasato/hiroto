@@ -3,6 +3,7 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -154,6 +156,10 @@ type Options struct {
 	Skills        SkillIndex
 	SessionSearch SessionSearchFunc
 	LLMClient     LLMClient // for vision_analyze to call the model
+	// OnStream, when set, receives real-time output chunks from long-running
+	// tools (terminal) as they are produced, so the UI can show a live box
+	// instead of waiting for the command to finish. Optional.
+	OnStream func(toolName, chunk string)
 }
 
 // LLMClient is a minimal interface for vision_analyze to call the LLM.
@@ -222,19 +228,47 @@ func registerTerminal(r *Registry, opts Options) {
 			defer cancel()
 			cmd := exec.CommandContext(cctx, shellCmd(), shellFlag(), cmdStr)
 			cmd.Dir = wd
-			out, err := cmd.CombinedOutput()
-			res := string(out)
+
+			// Stream stdout/stderr line-by-line so long-running commands show
+			// live output (OMP-style) instead of buffering until completion.
+			stdout, err := cmd.StdoutPipe()
 			if err != nil {
+				return Result{Output: fmt.Sprintf("stdout pipe: %v", err), IsError: true}
+			}
+			cmd.Stderr = cmd.Stdout // combine into the same pipe
+			if err := cmd.Start(); err != nil {
+				return Result{Output: fmt.Sprintf("start: %v", err), IsError: true}
+			}
+			var mu sync.Mutex
+			var buf strings.Builder
+			go func() {
+				sc := bufio.NewScanner(stdout)
+				sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+				for sc.Scan() {
+					line := sc.Text()
+					mu.Lock()
+					buf.WriteString(line + "\n")
+					mu.Unlock()
+					if opts.OnStream != nil {
+						opts.OnStream("terminal", line+"\n")
+					}
+				}
+			}()
+			runErr := cmd.Wait()
+			mu.Lock()
+			res := buf.String()
+			mu.Unlock()
+			if runErr != nil {
 				if cctx.Err() == context.DeadlineExceeded {
 					res += fmt.Sprintf("\n[command timed out after %s]", timeout)
 				} else {
-					res += fmt.Sprintf("\n[exit code: %v]", exitCode(err))
+					res += fmt.Sprintf("\n[exit code: %v]", exitCode(runErr))
 				}
 			}
 			if len(res) > 30000 {
 				res = res[:30000] + "\n[output truncated]"
 			}
-			return Result{Output: res, IsError: err != nil}
+			return Result{Output: res, IsError: runErr != nil}
 		},
 	})
 }
@@ -273,21 +307,21 @@ func registerReadFile(r *Registry) {
 			"limit":  map[string]any{"type": "integer", "description": "Max lines (default 2000)"},
 		}, "path"),
 		Exec: func(ctx context.Context, args map[string]any) Result {
-					path, _ := args["path"].(string)
-					// Resolve relative paths against the current working directory
-					// and block reads of sensitive files (env, keys, tokens).
-					if abs, err := filepath.Abs(path); err == nil {
-						path = abs
-					}
-					if w := sensitivePath(path); w != "" {
-						// Allow --force for intentional access.
-						if strings.HasPrefix(path, "--force ") {
-							path = strings.TrimPrefix(path, "--force ")
-						} else {
-							return Result{Output: "BLOCKED: " + w + "\n\nGunakan --force untuk tetap membaca: read_file(path=\"--force " + path + "\")", IsError: true}
-						}
-					}
-					data, err := os.ReadFile(path)
+			path, _ := args["path"].(string)
+			// Resolve relative paths against the current working directory
+			// and block reads of sensitive files (env, keys, tokens).
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+			if w := sensitivePath(path); w != "" {
+				// Allow --force for intentional access.
+				if strings.HasPrefix(path, "--force ") {
+					path = strings.TrimPrefix(path, "--force ")
+				} else {
+					return Result{Output: "BLOCKED: " + w + "\n\nGunakan --force untuk tetap membaca: read_file(path=\"--force " + path + "\")", IsError: true}
+				}
+			}
+			data, err := os.ReadFile(path)
 			if err != nil {
 				return Result{Output: err.Error(), IsError: true}
 			}

@@ -92,9 +92,13 @@ type line struct {
 }
 
 type (
-	streamMsg        string        // assistant text chunk
-	eventMsg         = agent.Event // alias: tool_start / tool_end / error
-	assistantDoneMsg struct {      // turn finished
+	streamMsg     string        // assistant text chunk
+	eventMsg      = agent.Event // alias: tool_start / tool_end / error
+	toolStreamMsg struct {      // live chunk from a running tool (terminal)
+		tool  string
+		chunk string
+	}
+	assistantDoneMsg struct { // turn finished
 		failed bool // the run returned an error (or was cancelled)
 	}
 	clarifyMsg struct {
@@ -822,6 +826,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		cmds = append(cmds, waitForActivity())
 
+	case toolStreamMsg:
+		// Live chunk from a running tool (terminal) — accumulate into a live
+		// box on the last line so the user sees output stream in real time
+		// (OMP-style) instead of waiting for tool_end.
+		m.appendToolStream(msg.tool, msg.chunk)
+		m.refresh()
+
 	case assistantDoneMsg:
 		m.busy = false
 		m.streaming = false
@@ -1330,6 +1341,17 @@ func (m *model) appendStream(chunk string) {
 	l.text += chunk
 }
 
+// appendToolStream accumulates a live chunk from a running tool into the most
+// recent tool line (the ⚒ … line from tool_start), so output streams into the
+// same box in real time. If there is no current tool line, start one.
+func (m *model) appendToolStream(tool, chunk string) {
+	if len(m.lines) == 0 || m.lines[len(m.lines)-1].kind != lineTool {
+		m.lines = append(m.lines, line{kind: lineTool, text: stMuted.Render("⚡ " + tool + ": ")})
+	}
+	l := &m.lines[len(m.lines)-1]
+	l.text += stMuted.Render(chunk)
+}
+
 func (m *model) endAssistantLine() {
 	if len(m.lines) > 0 && m.lines[len(m.lines)-1].kind == lineAssistant && m.lines[len(m.lines)-1].text == "" {
 		m.lines = m.lines[:len(m.lines)-1]
@@ -1664,6 +1686,13 @@ func buildAgent(cfg *config.Config, mem *memory.Store) *agent.Agent {
 	tools.RegisterBuiltin(reg, tools.Options{
 		TermTimeout: time.Duration(cfg.Agent.TermTimeout) * time.Second,
 		Workdir:     workdir(),
+		OnStream: func(toolName, chunk string) {
+			// Forward live tool output (terminal) to the TUI so it renders in
+			// a box while the command runs, instead of waiting for tool_end.
+			chMu.Lock()
+			streamCh <- toolStreamMsg{tool: toolName, chunk: chunk}
+			chMu.Unlock()
+		},
 		WebSearch: func(query string, limit int) ([]tools.SearchHit, error) {
 			hits, err := web.Search(context.Background(), query, limit)
 			out := make([]tools.SearchHit, 0, len(hits))
