@@ -197,7 +197,9 @@ func (a *Agent) Run(ctx context.Context, userText string, onText func(string)) (
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
 			if onText != nil {
-				assistant, streamErr = a.Client.Stream(ctx, a.Messages, toolDefs, onText)
+				assistant, streamErr = a.Client.Stream(ctx, a.Messages, toolDefs, onText, func(s string) {
+					a.emit(Event{Type: "reasoning", Text: s})
+				})
 			} else {
 				assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
 			}
@@ -402,7 +404,9 @@ func (a *Agent) continueRun(ctx context.Context, onText func(string)) (string, e
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
 			if onText != nil {
-				assistant, streamErr = a.Client.Stream(ctx, a.Messages, toolDefs, onText)
+				assistant, streamErr = a.Client.Stream(ctx, a.Messages, toolDefs, onText, func(s string) {
+					a.emit(Event{Type: "reasoning", Text: s})
+				})
 			} else {
 				assistant, streamErr = a.Client.Chat(ctx, a.Messages, toolDefs)
 			}

@@ -60,6 +60,7 @@ var (
 	stErr     = lipgloss.NewStyle().Foreground(cErr)
 	stInput   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cBgFaint).Padding(0, 1)
 	stHelp    = lipgloss.NewStyle().Foreground(cMuted)
+	stThink   = lipgloss.NewStyle().Foreground(cMuted).Italic(true)
 
 	stDiffAdd  = lipgloss.NewStyle().Foreground(cDiffAdd)
 	stDiffDel  = lipgloss.NewStyle().Foreground(cDiffDel)
@@ -93,6 +94,10 @@ type line struct {
 	// accumulate into it. Cleared when the tool reports its final result —
 	// prevents a new tool's chunks from colliding with a completed line.
 	live bool
+	// thinking marks a live chain-of-thought box (model reasoning streamed
+	// while the agent "berpikir"), so it renders dimmed and finalizes when
+	// the real answer or a tool call begins.
+	thinking bool
 }
 
 type (
@@ -809,6 +814,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamMsg:
 		m.streaming = true
+		m.finalizeThinking()
 		m.appendStream(string(msg))
 		m.refresh()
 		cmds = append(cmds, waitForActivity())
@@ -816,12 +822,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventMsg:
 		m.streaming = false
 		switch msg.Type {
+		case "reasoning":
+			// Live chain-of-thought: show it streaming so "berpikir" isn't a
+			// dead spinner (OMP parity). Accumulates into one dimmed box.
+			m.appendThinking(msg.Text)
 		case "tool_start":
+			m.finalizeThinking()
 			m.activityText = toolActivity(msg.ToolName, msg.ToolArgs)
 			m.activityStart = time.Now()
 			// The ⚒ header is its own row; streamed output starts a SEPARATE
-			// live box below it (appendToolStream). Marking the header live
-			// mashed the first output chunk onto it: "⚒ …/home/…".
+			// live box below it (appendToolStream).
 			m.lines = append(m.lines, m.renderAgentEvent(msg))
 		case "tool_end", "error", "compress_start", "compress_end":
 			m.activityText = ""
@@ -1420,6 +1430,58 @@ func renderLiveBox(raw string, width int) string {
 	return b.String()
 }
 
+// renderThinkingBox styles a raw chain-of-thought box: a dimmed italic block
+// under a "💭 berpikir" header, each row wrapped to the viewport width. This
+// is what makes the model's reasoning visible while it thinks (OMP parity).
+func renderThinkingBox(raw string, width int) string {
+	if width < 20 {
+		width = 80
+	}
+	lines := strings.Split(strings.TrimRight(raw, "\n"), "\n")
+	var b strings.Builder
+	b.WriteString(stThink.Render("💭 berpikir…"))
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		wrapped := ansi.Hardwrap("  "+ln, max(width-2, 20), true)
+		b.WriteString("\n" + stThink.Render(wrapped))
+	}
+	return b.String()
+}
+
+// appendThinking accumulates a live chain-of-thought chunk into a dimmed
+// "thinking" box so the wait while the model reasons is visible (OMP parity),
+// not a dead spinner. Stored raw; styled + wrapped at render.
+func (m *model) appendThinking(chunk string) {
+	if len(m.lines) == 0 || !m.lines[len(m.lines)-1].thinking || !m.lines[len(m.lines)-1].live {
+		m.lines = append(m.lines, line{kind: lineInfo, text: "", thinking: true, live: true})
+	}
+	l := &m.lines[len(m.lines)-1]
+	l.text += chunk
+	// Cap to the tail like the tool box.
+	if n := strings.Count(l.text, "\n"); n > maxLiveToolLines {
+		drop := n - maxLiveToolLines
+		idx := 0
+		for dropped := 0; dropped < drop && idx < len(l.text); idx++ {
+			if l.text[idx] == '\n' {
+				dropped++
+			}
+		}
+		l.text = "…\n" + l.text[idx:]
+	}
+}
+
+// finalizeThinking stops accumulating into any live thinking box (the answer
+// text or a tool call has begun). The box stays visible as a dimmed record.
+func (m *model) finalizeThinking() {
+	for i := range m.lines {
+		if m.lines[i].thinking {
+			m.lines[i].live = false
+		}
+	}
+}
+
 func (m *model) endAssistantLine() {
 	if len(m.lines) > 0 && m.lines[len(m.lines)-1].kind == lineAssistant && m.lines[len(m.lines)-1].text == "" {
 		m.lines = m.lines[:len(m.lines)-1]
@@ -1470,6 +1532,10 @@ func (m *model) refresh() {
 	for i := range m.lines {
 		ln := &m.lines[i]
 		text := ln.text
+		if ln.thinking {
+			b.WriteString(renderThinkingBox(text, m.vp.Width) + "\n")
+			continue
+		}
 		switch ln.kind {
 		case lineUser:
 			if text != "" {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -88,5 +89,63 @@ func TestNewTrimsTrailingSlash(t *testing.T) {
 	c := New("http://example.com/v1/", "key", "model")
 	if c.BaseURL != "http://example.com/v1" {
 		t.Errorf("BaseURL = %q, want %q", c.BaseURL, "http://example.com/v1")
+	}
+}
+
+func TestThinkFilterWholeBlock(t *testing.T) {
+	var f thinkFilter
+	answer, reasoning := f.feed("<think>reasoning here</think>answer")
+	if answer != "answer" {
+		t.Errorf("answer = %q, want %q", answer, "answer")
+	}
+	if reasoning != "reasoning here" {
+		t.Errorf("reasoning = %q, want %q", reasoning, "reasoning here")
+	}
+}
+
+func TestThinkFilterSplitAcrossChunks(t *testing.T) {
+	var f thinkFilter
+	var out strings.Builder
+	for _, chunk := range []string{"<thi", "nk>hidden ", "stuff</thi", "nk>ok", " then"} {
+		a, _ := f.feed(chunk)
+		out.WriteString(a)
+	}
+	a, _ := f.flush()
+	out.WriteString(a)
+	if out.String() != "ok then" {
+		t.Errorf("got %q, want %q", out.String(), "ok then")
+	}
+}
+
+func TestThinkFilterNoThink(t *testing.T) {
+	var f thinkFilter
+	answer, reasoning := f.feed("plain text <b>html</b> here")
+	if answer != "plain text <b>html</b> here" {
+		t.Errorf("answer = %q", answer)
+	}
+	if reasoning != "" {
+		t.Errorf("reasoning should be empty, got %q", reasoning)
+	}
+}
+
+func TestThinkFilterMultipleBlocks(t *testing.T) {
+	var f thinkFilter
+	answer, reasoning := f.feed("<think>a</think>x<think>b</think>y")
+	if answer != "xy" {
+		t.Errorf("answer = %q, want %q", answer, "xy")
+	}
+	if reasoning != "ab" {
+		t.Errorf("reasoning = %q, want %q", reasoning, "ab")
+	}
+}
+
+func TestThinkFilterTextBeforeTag(t *testing.T) {
+	var f thinkFilter
+	answer, reasoning := f.feed("hello <think>secret plan</think> world")
+	if answer != "hello  world" {
+		t.Errorf("answer = %q", answer)
+	}
+	if reasoning != "secret plan" {
+		t.Errorf("reasoning = %q", reasoning)
 	}
 }

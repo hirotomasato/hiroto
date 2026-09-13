@@ -334,3 +334,38 @@ func TestLiveBoxWraps(t *testing.T) {
 		}
 	}
 }
+
+// TestThinkingBoxStreams: reasoning chunks accumulate into ONE dimmed thinking
+// box (not a dead spinner), and the box finalizes when the answer text begins.
+func TestThinkingBoxStreams(t *testing.T) {
+	m := tinyModel(t)
+	u, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm := u.(model)
+
+	u, _ = mm.Update(eventMsg(agent.Event{Type: "reasoning", Text: "let me check the directory first\n"}))
+	mm = u.(model)
+	u, _ = mm.Update(eventMsg(agent.Event{Type: "reasoning", Text: "then create the venv\n"}))
+	mm = u.(model)
+
+	box := mm.lines[len(mm.lines)-1]
+	if !box.thinking || !box.live {
+		t.Fatalf("expected a live thinking box, got thinking=%v live=%v", box.thinking, box.live)
+	}
+	if !strings.Contains(box.text, "check the directory") || !strings.Contains(box.text, "create the venv") {
+		t.Errorf("reasoning not accumulated: %q", box.text)
+	}
+	// Rendered box must carry the "berpikir" header and not overflow width.
+	rendered := renderThinkingBox(box.text, mm.vp.Width)
+	if !strings.Contains(rendered, "berpikir") {
+		t.Errorf("thinking header missing: %q", rendered)
+	}
+
+	// Answer text finalizes the box (stops accumulating, stays as record).
+	u, _ = mm.Update(streamMsg("here is the plan"))
+	mm = u.(model)
+	for _, ln := range mm.lines {
+		if ln.thinking && ln.live {
+			t.Error("thinking box still live after answer began")
+		}
+	}
+}

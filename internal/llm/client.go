@@ -140,7 +140,9 @@ type StreamDelta struct {
 }
 
 // Stream performs an SSE-streaming completion; on stream failure callers should fall back to Chat.
-func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, onText func(string)) (Message, error) {
+// onReasoning (optional) receives the model's chain-of-thought so the UI can show a live
+// "thinking" box instead of a silent spinner.
+func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, onText, onReasoning func(string)) (Message, error) {
 	reqBody, _ := json.Marshal(request{Model: c.Model(), Messages: messages, Tools: tools, Stream: true, Temperature: 0.4})
 	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
@@ -165,6 +167,7 @@ func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, o
 	var toolCalls []ToolCall // assembled incrementally
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 256*1024), 1024*1024)
+	var think thinkFilter
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -177,8 +180,9 @@ func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, o
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`
@@ -197,10 +201,22 @@ func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, o
 			continue
 		}
 		d := chunk.Choices[0].Delta
+		// DeepSeek/GLM-style providers put chain-of-thought in a dedicated
+		// reasoning_content field; forward it live so the UI shows thinking.
+		if d.ReasoningContent != "" && onReasoning != nil {
+			onReasoning(d.ReasoningContent)
+		}
 		if d.Content != "" {
-			content.WriteString(d.Content)
-			if onText != nil {
-				onText(d.Content)
+			// Other providers inline reasoning as …
+			answer, reasoning := think.feed(d.Content)
+			if reasoning != "" && onReasoning != nil {
+				onReasoning(reasoning)
+			}
+			if answer != "" {
+				content.WriteString(answer)
+				if onText != nil {
+					onText(answer)
+				}
 			}
 		}
 		for _, tc := range d.ToolCalls {
@@ -216,6 +232,17 @@ func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, o
 			toolCalls[tc.Index].Function.Arguments += tc.Function.Arguments
 		}
 	}
+	if ansTail, reasonTail := think.flush(); ansTail != "" || reasonTail != "" {
+		if reasonTail != "" && onReasoning != nil {
+			onReasoning(reasonTail)
+		}
+		if ansTail != "" {
+			content.WriteString(ansTail)
+			if onText != nil {
+				onText(ansTail)
+			}
+		}
+	}
 	if err := sc.Err(); err != nil {
 		return Message{}, err
 	}
@@ -225,4 +252,75 @@ func (c *Client) Stream(ctx context.Context, messages []Message, tools []Tool, o
 	}
 	msg.ToolCalls = toolCalls
 	return msg, nil
+}
+
+// thinkFilter splits a text stream into the visible answer and the hidden
+// … reasoning. Feed each content chunk; it returns (answer,
+// reasoning) for that chunk. State is per-stream: create a fresh filter per
+// request.
+type thinkFilter struct {
+	inThink bool
+	pending string // tail that may hold a partial tag split across chunks
+}
+
+const (
+	thinkOpenTag  = "<think>"
+	thinkCloseTag = "</think>"
+)
+
+func (f *thinkFilter) feed(s string) (answer, reasoning string) {
+	s = f.pending + s
+	f.pending = ""
+	var a, r strings.Builder
+	for s != "" {
+		if f.inThink {
+			i := strings.Index(s, thinkCloseTag)
+			if i < 0 {
+				keep := partialTagLen(s, thinkCloseTag)
+				r.WriteString(s[:len(s)-keep])
+				f.pending = s[len(s)-keep:]
+				break
+			}
+			r.WriteString(s[:i])
+			f.inThink = false
+			s = s[i+len(thinkCloseTag):]
+			continue
+		}
+		i := strings.Index(s, thinkOpenTag)
+		if i < 0 {
+			keep := partialTagLen(s, thinkOpenTag)
+			a.WriteString(s[:len(s)-keep])
+			f.pending = s[len(s)-keep:]
+			break
+		}
+		a.WriteString(s[:i])
+		f.inThink = true
+		s = s[i+len(thinkOpenTag):]
+	}
+	return a.String(), r.String()
+}
+
+// flush emits whatever is still buffered. Call once at end of stream.
+func (f *thinkFilter) flush() (answer, reasoning string) {
+	t := f.pending
+	f.pending = ""
+	if f.inThink {
+		return "", t
+	}
+	return t, ""
+}
+
+// partialTagLen returns the length of the longest suffix of s that is a
+// proper prefix of tag, so a tag split across chunks is still detected.
+func partialTagLen(s, tag string) int {
+	max := len(tag) - 1
+	if len(s) < max {
+		max = len(s)
+	}
+	for n := max; n > 0; n-- {
+		if strings.HasSuffix(s, tag[:n]) {
+			return n
+		}
+	}
+	return 0
 }
