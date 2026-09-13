@@ -819,10 +819,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tool_start":
 			m.activityText = toolActivity(msg.ToolName, msg.ToolArgs)
 			m.activityStart = time.Now()
-			// Mark the new tool line live so streamed output accumulates here.
-			nl := m.renderAgentEvent(msg)
-			nl.live = true
-			m.lines = append(m.lines, nl)
+			// The ⚒ header is its own row; streamed output starts a SEPARATE
+			// live box below it (appendToolStream). Marking the header live
+			// mashed the first output chunk onto it: "⚒ …/home/…".
+			m.lines = append(m.lines, m.renderAgentEvent(msg))
 		case "tool_end", "error", "compress_start", "compress_end":
 			m.activityText = ""
 			// Clear any live marker so a later tool's stream starts a fresh box
@@ -1372,37 +1372,52 @@ func (m *model) appendStream(chunk string) {
 // tail) so the user sees current activity, mirroring OMP's tidy live box.
 const maxLiveToolLines = 12
 
-// appendToolStream accumulates a live chunk from a running tool into the most
-// recent tool line (the ⚒ … line from tool_start), so output streams into the
-// same box in real time. If there is no current tool line, start one. The box
+// appendToolStream accumulates a live chunk from a running tool into a
+// dedicated live box (a separate line below the ⚒ header). Chunks are stored
+// as RAW text (no per-chunk ANSI) so the line-cap and final styling operate
+// on clean bytes — styling each chunk individually left orphaned escape
+// sequences when the cap sliced mid-span, which garbled width math. The box
 // is capped to the last maxLiveToolLines lines (auto-scroll to the tail).
 func (m *model) appendToolStream(tool, chunk string) {
-	// Only extend a line still marked live (the in-progress ⚒ tool_start
-	// line). A completed tool line must not receive a new tool's chunks —
-	// that collision garbles the transcript (e.g. an approval error stuck to
-	// a prior ✓ line).
-	if len(m.lines) == 0 || m.lines[len(m.lines)-1].kind != lineTool || !m.lines[len(m.lines)-1].live {
-		nl := line{kind: lineTool, text: stMuted.Render("⚡ " + tool + ": "), live: true}
-		m.lines = append(m.lines, nl)
+	// Start a fresh live box unless the last line is one still open.
+	if len(m.lines) == 0 || !m.lines[len(m.lines)-1].live {
+		m.lines = append(m.lines, line{kind: lineTool, text: "⚡ " + tool + ":\n", live: true})
 	}
 	l := &m.lines[len(m.lines)-1]
-	l.text += stMuted.Render(chunk)
-	// Cap the live box to the last maxLiveToolLines lines so it scrolls like
-	// OMP rather than flooding the viewport. Chunks are line-based (the
-	// terminal tool forwards one line at a time), so raw "\n" count ≈ rows.
+	l.text += chunk
+	// Cap to the tail so a verbose command scrolls instead of flooding.
 	if n := strings.Count(l.text, "\n"); n > maxLiveToolLines {
 		drop := n - maxLiveToolLines
 		idx := 0
-		for dropped := 0; dropped < drop && idx < len(l.text); {
+		for dropped := 0; dropped < drop && idx < len(l.text); idx++ {
 			if l.text[idx] == '\n' {
 				dropped++
 			}
-			idx++
 		}
-		if idx <= len(l.text) {
-			l.text = "  …\n" + l.text[idx:]
+		l.text = "⚡ " + tool + ": …\n" + l.text[idx:]
+	}
+}
+
+// renderLiveBox styles a raw live tool-output box: the first line is the
+// "⚡ tool:" header, the rest are indented under it. Every row is hard-wrapped
+// to the viewport width so no line can overflow the frame. Styling happens
+// once here (on clean text), never per chunk.
+func renderLiveBox(raw string, width int) string {
+	if width < 20 {
+		width = 80
+	}
+	lines := strings.Split(strings.TrimRight(raw, "\n"), "\n")
+	var b strings.Builder
+	for i, ln := range lines {
+		if i == 0 {
+			b.WriteString(stMuted.Render(ln))
+		} else {
+			// Indent output 2 cols, wrap to the remaining width.
+			wrapped := ansi.Hardwrap("  "+ln, max(width-2, 20), true)
+			b.WriteString("\n" + stMuted.Render(wrapped))
 		}
 	}
+	return b.String()
 }
 
 func (m *model) endAssistantLine() {
@@ -1460,13 +1475,20 @@ func (m *model) refresh() {
 			if text != "" {
 				text = stUserTag.Render("you ❯") + " " + text
 			}
+		case lineTool:
+			// A live tool box is stored raw; style + wrap it here. Indent the
+			// output under the ⚒ header and hard-wrap every row to the viewport
+			// width so a long output line can't overflow the frame (that
+			// overflow pushed text to the right edge).
+			if ln.live {
+				text = renderLiveBox(text, m.vp.Width)
+			}
 		case lineAssistant:
 			if strings.TrimSpace(text) == "" {
 				continue // streaming placeholder — nothing to show yet
 			}
-			// Streaming lines stay raw (mdRendered=false) — glamour on
-			// every chunk was the main render hotspot. The style pass
-			// happens once in endAssistantLine().
+			// Streaming lines stay raw (mdRendered=false) — glamour on every
+			// chunk was the main render hotspot; the style pass happens once.
 			if !ln.mdRendered {
 				if rendered, err := mdRendererW(m.width - 2).Render(text); err == nil {
 					text = strings.TrimRight(ansi.Strip(rendered), "\n")

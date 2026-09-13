@@ -11,6 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/hirotomasato/hiroto/internal/agent"
 	"github.com/hirotomasato/hiroto/internal/llm"
 	"github.com/hirotomasato/hiroto/internal/tools"
@@ -224,9 +226,10 @@ func TestStripSeveredANSI(t *testing.T) {
 	}
 }
 
-// TestToolStreamAccumulates: live chunks from a running tool (terminal) must
-// accumulate into the current tool line — one box streaming in real time —
-// rather than each chunk spawning its own line.
+// TestToolStreamAccumulates: live chunks from a running tool go into ONE
+// dedicated live box below the ⚒ header — the first chunk opens the box, the
+// rest accumulate into it (not one line per chunk, and never mashed onto the
+// ⚒ header line).
 func TestToolStreamAccumulates(t *testing.T) {
 	m := tinyModel(t)
 	u, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -234,19 +237,25 @@ func TestToolStreamAccumulates(t *testing.T) {
 
 	u, _ = mm.Update(eventMsg(agent.Event{Type: "tool_start", ToolName: "terminal", ToolArgs: `{"command":"go build"}`}))
 	mm = u.(model)
-	before := len(mm.lines)
+	headerIdx := len(mm.lines) - 1
 
 	u, _ = mm.Update(toolStreamMsg{tool: "terminal", chunk: "compiling foo\n"})
 	mm = u.(model)
+	boxIdx := len(mm.lines) - 1
 	u, _ = mm.Update(toolStreamMsg{tool: "terminal", chunk: "compiling bar\n"})
 	mm = u.(model)
 
-	if len(mm.lines) != before {
-		t.Fatalf("stream chunks should accumulate into one line, got %d want %d", len(mm.lines), before)
+	// The ⚒ header must stay clean (no output mashed onto it).
+	if strings.Contains(mm.lines[headerIdx].text, "compiling") {
+		t.Errorf("output leaked onto ⚒ header: %q", mm.lines[headerIdx].text)
 	}
-	last := mm.lines[len(mm.lines)-1]
-	if !strings.Contains(last.text, "compiling foo") || !strings.Contains(last.text, "compiling bar") {
-		t.Errorf("chunks not accumulated: %q", last.text)
+	// Both chunks land in the SAME live box (one new line total).
+	if len(mm.lines) != boxIdx+1 {
+		t.Fatalf("chunks should share one box, got %d lines", len(mm.lines)-boxIdx)
+	}
+	box := mm.lines[boxIdx]
+	if !box.live || !strings.Contains(box.text, "compiling foo") || !strings.Contains(box.text, "compiling bar") {
+		t.Errorf("chunks not accumulated in live box: %q", box.text)
 	}
 }
 
@@ -301,5 +310,27 @@ func TestNoLineCollision(t *testing.T) {
 	last := mm.lines[len(mm.lines)-1]
 	if !strings.Contains(last.text, "fresh output") {
 		t.Errorf("new stream not on its own line: %q", last.text)
+	}
+}
+
+// TestLiveBoxWraps: a long live-output line must be hard-wrapped to the
+// viewport width so it can't overflow the frame (the bug that pushed text to
+// the right edge). No rendered row may exceed vp.Width.
+func TestLiveBoxWraps(t *testing.T) {
+	m := tinyModel(t)
+	u, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	mm := u.(model)
+	u, _ = mm.Update(eventMsg(agent.Event{Type: "tool_start", ToolName: "terminal", ToolArgs: `{"command":"x"}`}))
+	mm = u.(model)
+	long := strings.Repeat("A", 300) + "\n"
+	u, _ = mm.Update(toolStreamMsg{tool: "terminal", chunk: long})
+	mm = u.(model)
+
+	box := mm.lines[len(mm.lines)-1]
+	rendered := renderLiveBox(box.text, mm.vp.Width)
+	for _, row := range strings.Split(ansi.Strip(rendered), "\n") {
+		if lipgloss.Width(row) > mm.vp.Width {
+			t.Errorf("row overflows viewport: %d > %d (%q…)", lipgloss.Width(row), mm.vp.Width, row[:20])
+		}
 	}
 }
